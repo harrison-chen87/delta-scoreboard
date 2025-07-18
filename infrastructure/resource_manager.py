@@ -3,8 +3,19 @@
 import logging
 import requests
 import json
+import os
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
+
+# Try to import Databricks SDK
+try:
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.service.sql import CreateWarehouseRequest
+    from databricks.sdk.service.sql import WarehouseType
+    from databricks.sdk.service.sql import Channel
+    HAS_DATABRICKS_SDK = True
+except ImportError:
+    HAS_DATABRICKS_SDK = False
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -49,7 +60,40 @@ class SQLWarehouseManager:
             "Content-Type": "application/json"
         }
         
-        logger.info(f"Initialized SQL Warehouse Manager for {hostname}")
+        # Check if running in Databricks environment
+        self.is_databricks_env = self._is_databricks_environment()
+        self.use_sdk = HAS_DATABRICKS_SDK and self.is_databricks_env
+        
+        if self.use_sdk:
+            try:
+                self.workspace_client = WorkspaceClient(
+                    host=f"https://{hostname}",
+                    token=access_token
+                )
+                logger.info(f"Initialized SQL Warehouse Manager with Databricks SDK for {hostname}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Databricks SDK, falling back to HTTP: {e}")
+                self.use_sdk = False
+        
+        if not self.use_sdk:
+            logger.info(f"Initialized SQL Warehouse Manager with HTTP requests for {hostname}")
+    
+    def _is_databricks_environment(self) -> bool:
+        """Check if running in a Databricks environment."""
+        # Check for Databricks environment variables
+        databricks_env_vars = [
+            'DATABRICKS_RUNTIME_VERSION',
+            'DATABRICKS_TOKEN',
+            'DB_HOME',
+            'DATABRICKS_ROOT_VIRTUALENV_ENV'
+        ]
+        
+        for var in databricks_env_vars:
+            if os.getenv(var):
+                logger.info(f"Detected Databricks environment via {var}")
+                return True
+        
+        return False
     
     def create_warehouse(self, config: WarehouseConfig) -> WarehouseResult:
         """
@@ -61,6 +105,64 @@ class SQLWarehouseManager:
         Returns:
             WarehouseResult with creation details
         """
+        if self.use_sdk:
+            return self._create_warehouse_with_sdk(config)
+        else:
+            return self._create_warehouse_with_http(config)
+    
+    def _create_warehouse_with_sdk(self, config: WarehouseConfig) -> WarehouseResult:
+        """Create warehouse using Databricks SDK."""
+        try:
+            logger.info(f"Creating warehouse '{config.name}' with size '{config.cluster_size}' using Databricks SDK")
+            
+            # Create warehouse request using SDK
+            warehouse_request = CreateWarehouseRequest(
+                name=config.name,
+                cluster_size=config.cluster_size,
+                auto_stop_mins=config.auto_stop_mins,
+                max_num_clusters=config.max_num_clusters,
+                warehouse_type=WarehouseType.PRO,
+                enable_photon=config.enable_photon,
+                enable_serverless_compute=config.enable_serverless_compute,
+                channel=Channel.CHANNEL_NAME_CURRENT
+            )
+            
+            # Make the API call using SDK
+            warehouse = self.workspace_client.warehouses.create(warehouse_request)
+            
+            if warehouse.id:
+                result = WarehouseResult(
+                    name=config.name,
+                    id=warehouse.id,
+                    http_path=f"/sql/1.0/warehouses/{warehouse.id}",
+                    success=True
+                )
+                logger.info(f"Successfully created warehouse using SDK: {warehouse.id}")
+                return result
+            else:
+                error_msg = "No warehouse ID in SDK response"
+                logger.error(f"Error creating warehouse: {error_msg}")
+                return WarehouseResult(
+                    name=config.name,
+                    id="",
+                    http_path="",
+                    success=False,
+                    error=error_msg
+                )
+                
+        except Exception as e:
+            error_msg = f"SDK error: {str(e)}"
+            logger.error(f"Error creating warehouse with SDK: {error_msg}")
+            return WarehouseResult(
+                name=config.name,
+                id="",
+                http_path="",
+                success=False,
+                error=error_msg
+            )
+    
+    def _create_warehouse_with_http(self, config: WarehouseConfig) -> WarehouseResult:
+        """Create warehouse using HTTP requests."""
         try:
             # Prepare the request payload
             payload = {
@@ -76,7 +178,7 @@ class SQLWarehouseManager:
                 }
             }
             
-            logger.info(f"Creating warehouse '{config.name}' with size '{config.cluster_size}'")
+            logger.info(f"Creating warehouse '{config.name}' with size '{config.cluster_size}' using HTTP")
             logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
             
             # Make the API request
@@ -216,6 +318,37 @@ class SQLWarehouseManager:
         Returns:
             List of warehouse information dictionaries
         """
+        if self.use_sdk:
+            return self._list_warehouses_with_sdk()
+        else:
+            return self._list_warehouses_with_http()
+    
+    def _list_warehouses_with_sdk(self) -> List[Dict[str, Any]]:
+        """List warehouses using Databricks SDK."""
+        try:
+            warehouses = list(self.workspace_client.warehouses.list())
+            warehouse_dicts = []
+            
+            for warehouse in warehouses:
+                warehouse_dict = {
+                    "id": warehouse.id,
+                    "name": warehouse.name,
+                    "cluster_size": warehouse.cluster_size,
+                    "auto_stop_mins": warehouse.auto_stop_mins,
+                    "state": warehouse.state,
+                    "warehouse_type": warehouse.warehouse_type
+                }
+                warehouse_dicts.append(warehouse_dict)
+            
+            logger.info(f"Found {len(warehouse_dicts)} warehouses using SDK")
+            return warehouse_dicts
+            
+        except Exception as e:
+            logger.error(f"Error listing warehouses with SDK: {str(e)}")
+            return []
+    
+    def _list_warehouses_with_http(self) -> List[Dict[str, Any]]:
+        """List warehouses using HTTP requests."""
         try:
             response = requests.get(
                 self.base_url,
@@ -246,6 +379,24 @@ class SQLWarehouseManager:
         Returns:
             True if deletion was successful, False otherwise
         """
+        if self.use_sdk:
+            return self._delete_warehouse_with_sdk(warehouse_id)
+        else:
+            return self._delete_warehouse_with_http(warehouse_id)
+    
+    def _delete_warehouse_with_sdk(self, warehouse_id: str) -> bool:
+        """Delete warehouse using Databricks SDK."""
+        try:
+            self.workspace_client.warehouses.delete(warehouse_id)
+            logger.info(f"Successfully deleted warehouse using SDK: {warehouse_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting warehouse {warehouse_id} with SDK: {str(e)}")
+            return False
+    
+    def _delete_warehouse_with_http(self, warehouse_id: str) -> bool:
+        """Delete warehouse using HTTP requests."""
         try:
             response = requests.delete(
                 f"{self.base_url}/{warehouse_id}",
