@@ -334,7 +334,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
     logger.info("Returning test message to verify callback mechanism")
     
     # TEMPORARY: Return test message to verify callback works
-    return "Test table content", test_message
+    # return "Test table content", test_message  # DISABLED - callback mechanism works!
     
     logger.info(f"Fetching users from Databricks workspace: {hostname}")
     
