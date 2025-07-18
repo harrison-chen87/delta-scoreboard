@@ -336,12 +336,15 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
     # Test return to verify callback is working
     logger.info("✅ Validation passed, proceeding with user fetch")
     
-    # Quick test - return a simple message to verify callback is working
-    test_message = dbc.Alert("🧪 Testing callback - this should appear in the UI", color="info")
-    logger.info("Returning test message to verify callback mechanism")
-    
-    # TEMPORARY: Return test message to verify callback works
-    # return "Test table content", test_message  # DISABLED - callback mechanism works!
+    # SIMPLE TEST: Return basic content to verify callback updates UI
+    # simple_test_table = html.Div([
+    #     html.H4("🧪 SIMPLE TEST: Callback is working!"),
+    #     html.P("If you see this, the callback mechanism is functioning correctly."),
+    #     html.P("The issue is likely with the complex table structure."),
+    # ])
+    # simple_success = dbc.Alert("✅ Simple test successful!", color="success")
+    # logger.info("Returning simple test content")
+    # return simple_test_table, simple_success
     
     logger.info(f"Fetching users from Databricks workspace: {hostname}")
     
@@ -450,39 +453,59 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 }
             ]
 
-        # Create the users table (limit to first 100 for performance)
-        display_limit = 100
+        # Create the leaderboard-themed users table with scroll functionality
+        display_limit = 200  # Increased limit for better leaderboard view
         display_users = users_data[:display_limit]
-        logger.info(f"Creating users table with {len(display_users)} displayed users (out of {len(users_data)} total)")
+        logger.info(f"Creating leaderboard table with {len(display_users)} displayed users (out of {len(users_data)} total)")
         
         table_rows = []
         for i, user in enumerate(display_users):
             if i < 5:  # Only log first 5 users to avoid spam
-                logger.info(f"Creating row {i+1}: {user.get('Display Name', 'No name')} ({user.get('Email', 'No email')})")
+                logger.info(f"Creating leaderboard row {i+1}: {user.get('Display Name', 'No name')} ({user.get('Email', 'No email')})")
+            
+            # Initialize score as 0 for new participants
+            initial_score = 0
+            
             table_rows.append(
                 html.Tr([
-                    html.Td(user['ID'][:12] + "..." if len(user['ID']) > 15 else user['ID']),  # Truncate long IDs
-                    html.Td(user['Display Name']),
-                    html.Td(user['Email']),
-                    html.Td(user['Username']),
-                    html.Td(user['Status'])
+                    html.Td(f"#{i+1}", style={"font-weight": "bold", "color": "#0d6efd"}),  # Rank
+                    html.Td(user['Display Name'], style={"font-weight": "500"}),
+                    html.Td(user['Email'], style={"color": "#6c757d"}),
+                    html.Td("✅ Yes" if user['Status'] == '✅ Active' else "❌ No", 
+                           style={"color": "#198754" if user['Status'] == '✅ Active' else "#dc3545"}),
+                    html.Td(f"{initial_score} pts", style={"font-weight": "bold", "color": "#198754"})
                 ])
             )
         
-        users_table = dbc.Table([
-            html.Thead([
-                html.Tr([
-                    html.Th("👤 User ID"),
-                    html.Th("📝 Display Name"),
-                    html.Th("📧 Email Address"),
-                    html.Th("🔑 Username"),
-                    html.Th("🔄 Status")
-                ])
-            ]),
-            html.Tbody(table_rows)
-        ], bordered=True, hover=True, striped=True, className="mt-3")
+        # Create scrollable table container with leaderboard styling
+        users_table = html.Div([
+            html.H5([
+                html.I(className="bi bi-trophy-fill me-2", style={"color": "#ffc107"}),
+                f"Workshop Leaderboard - {len(display_users)} Participants"
+            ], className="mb-3"),
+            
+            html.Div([
+                dbc.Table([
+                    html.Thead([
+                        html.Tr([
+                            html.Th("🏆 Rank", style={"background-color": "#f8f9fa", "border-bottom": "2px solid #dee2e6"}),
+                            html.Th("👤 Participant Name", style={"background-color": "#f8f9fa", "border-bottom": "2px solid #dee2e6"}),
+                            html.Th("📧 Email Address", style={"background-color": "#f8f9fa", "border-bottom": "2px solid #dee2e6"}),
+                            html.Th("📊 Active on Workspace", style={"background-color": "#f8f9fa", "border-bottom": "2px solid #dee2e6"}),
+                            html.Th("🎯 Current Score", style={"background-color": "#f8f9fa", "border-bottom": "2px solid #dee2e6"})
+                        ])
+                    ]),
+                    html.Tbody(table_rows)
+                ], bordered=True, hover=True, striped=True, responsive=True)
+            ], style={
+                "max-height": "500px", 
+                "overflow-y": "auto", 
+                "border": "1px solid #dee2e6",
+                "border-radius": "8px"
+            })
+        ], className="mt-3")
         
-        logger.info(f"Users table created successfully with {len(table_rows)} rows")
+        logger.info(f"Leaderboard table created successfully with {len(table_rows)} participant rows")
 
         # Check if we're showing demo data
         is_demo_data = any(user.get('Status', '').startswith('⚠️') for user in users_data)
@@ -497,22 +520,38 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         else:
             if len(users_data) > display_limit:
                 success_message = dbc.Alert([
-                    html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
-                    html.P(f"Retrieved {len(users_data)} active users from workspace using Databricks SDK"),
-                    html.P(f"📊 Displaying first {display_limit} users for optimal performance. All users are available for workshop participation."),
-                    html.P("These users are eligible to participate in the workshop. Their email addresses are ready for notifications.")
+                    html.H6("🎉 Leaderboard Initialized Successfully!", className="alert-heading"),
+                    html.P(f"🏆 Found {len(users_data)} eligible participants in the workspace"),
+                    html.P(f"📊 Displaying top {display_limit} participants in the leaderboard below"),
+                    html.P("🎯 All participants start with 0 points. Scores will update as workshop activities are completed!")
                 ], color="success")
             else:
                 success_message = dbc.Alert([
-                    html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
-                    html.P(f"Retrieved {len(users_data)} active users from workspace using Databricks SDK"),
-                    html.P("These users are eligible to participate in the workshop. Their email addresses are ready for notifications.")
+                    html.H6("🎉 Leaderboard Initialized Successfully!", className="alert-heading"),
+                    html.P(f"🏆 Found {len(users_data)} eligible participants in the workspace"),
+                    html.P("🎯 All participants start with 0 points. Scores will update as workshop activities are completed!")
                 ], color="success")
         
-        logger.info(f"Returning users table with {len(display_users)} displayed users (out of {len(users_data)} total) and success message")
-        logger.info(f"Users table type: {type(users_table)}")
-        logger.info(f"Success message type: {type(success_message)}")
-        logger.info(f"First few users: {users_data[:2] if users_data else 'No users'}")
+        logger.info(f"=== CALLBACK RETURN PREPARATION ===")
+        logger.info(f"📊 Returning leaderboard with {len(display_users)} displayed participants (out of {len(users_data)} total)")
+        logger.info(f"🏆 Users table type: {type(users_table)}")
+        logger.info(f"✅ Success message type: {type(success_message)}")
+        logger.info(f"👥 First few participants: {users_data[:2] if users_data else 'No users'}")
+        
+        # Verify the table structure
+        if hasattr(users_table, 'children') and users_table.children:
+            logger.info(f"📋 Table structure verified: {len(users_table.children)} components")
+        else:
+            logger.warning("⚠️  Table structure may be incorrect")
+        
+        logger.info("🔄 Executing callback return...")
+        
+        # TEMPORARY: Simple test to verify callback works
+        # test_table = html.Div([
+        #     html.H4("🧪 TEST: Callback Working!"),
+        #     html.P(f"Found {len(users_data)} users successfully!")
+        # ])
+        # return test_table, success_message
         
         return users_table, success_message
 
