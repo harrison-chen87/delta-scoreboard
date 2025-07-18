@@ -277,9 +277,12 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
     try:
         # Use Databricks SDK to fetch users
         try:
+            # Clean hostname to avoid double https:// prefix
+            clean_hostname = hostname.replace("https://", "").replace("http://", "")
             workspace_client = WorkspaceClient(
-                host=f"https://{hostname}",
-                token=access_token
+                host=f"https://{clean_hostname}",
+                token=access_token,
+                auth_type="pat"  # Explicitly set to Personal Access Token authentication
             )
             
             # Get all users from the workspace

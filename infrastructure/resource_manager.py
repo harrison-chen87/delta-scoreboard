@@ -53,9 +53,13 @@ class SQLWarehouseManager:
         
         # Initialize the Databricks SDK client
         try:
+            # Explicitly use PAT authentication and ignore OAuth environment variables
+            # Clean hostname to avoid double https:// prefix
+            clean_hostname = hostname.replace("https://", "").replace("http://", "")
             self.workspace_client = WorkspaceClient(
-                host=f"https://{hostname}",
-                token=access_token
+                host=f"https://{clean_hostname}",
+                token=access_token,
+                auth_type="pat"  # Explicitly set to Personal Access Token authentication
             )
             
             # Test the SDK connection by checking if we can access the client
