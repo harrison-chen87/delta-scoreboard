@@ -18,8 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize Dash app for Databricks deployment
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-app.config.suppress_callback_exceptions = True
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 server = app.server  # This is needed for Databricks Apps
 
 # T-shirt size options based on Databricks documentation
@@ -313,16 +312,29 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
 )
 def fetch_users_from_scim(n_clicks, hostname, access_token):
     """Fetch users from Databricks workspace using the official SDK users.list() method."""
-    logger.info(f"Fetch users callback triggered: n_clicks={n_clicks}, hostname={hostname is not None}, access_token={access_token is not None}")
+    logger.info(f"=== FETCH USERS CALLBACK START ===")
+    logger.info(f"n_clicks={n_clicks}, hostname_provided={hostname is not None}, token_provided={access_token is not None}")
     
     if not n_clicks:
+        logger.info("No clicks detected, returning empty values")
         return "", ""
     
     # Validate inputs
     if not all([hostname, access_token]):
         error_msg = "❌ Please fill in hostname and access token"
         logger.warning(error_msg)
+        logger.info(f"Returning validation error: {error_msg}")
         return "", dbc.Alert(error_msg, color="danger")
+    
+    # Test return to verify callback is working
+    logger.info("✅ Validation passed, proceeding with user fetch")
+    
+    # Quick test - return a simple message to verify callback is working
+    test_message = dbc.Alert("🧪 Testing callback - this should appear in the UI", color="info")
+    logger.info("Returning test message to verify callback mechanism")
+    
+    # TEMPORARY: Return test message to verify callback works
+    return "Test table content", test_message
     
     logger.info(f"Fetching users from Databricks workspace: {hostname}")
     
@@ -430,6 +442,21 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
             ]
 
         # Create the users table
+        logger.info(f"Creating users table with {len(users_data)} users")
+        
+        table_rows = []
+        for i, user in enumerate(users_data):
+            logger.info(f"Creating row {i+1}: {user.get('Display Name', 'No name')} ({user.get('Email', 'No email')})")
+            table_rows.append(
+                html.Tr([
+                    html.Td(user['ID'][:12] + "..." if len(user['ID']) > 15 else user['ID']),  # Truncate long IDs
+                    html.Td(user['Display Name']),
+                    html.Td(user['Email']),
+                    html.Td(user['Username']),
+                    html.Td(user['Status'])
+                ])
+            )
+        
         users_table = dbc.Table([
             html.Thead([
                 html.Tr([
@@ -440,16 +467,10 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                     html.Th("🔄 Status")
                 ])
             ]),
-            html.Tbody([
-                html.Tr([
-                    html.Td(user['ID'][:12] + "..." if len(user['ID']) > 15 else user['ID']),  # Truncate long IDs
-                    html.Td(user['Display Name']),
-                    html.Td(user['Email']),
-                    html.Td(user['Username']),
-                    html.Td(user['Status'])
-                ]) for user in users_data
-            ])
+            html.Tbody(table_rows)
         ], bordered=True, hover=True, striped=True, className="mt-3")
+        
+        logger.info(f"Users table created successfully with {len(table_rows)} rows")
 
         # Check if we're showing demo data
         is_demo_data = any(user.get('Status', '').startswith('⚠️') for user in users_data)
@@ -469,6 +490,10 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
             ], color="success")
         
         logger.info(f"Returning users table with {len(users_data)} users and success message")
+        logger.info(f"Users table type: {type(users_table)}")
+        logger.info(f"Success message type: {type(success_message)}")
+        logger.info(f"First few users: {users_data[:2] if users_data else 'No users'}")
+        
         return users_table, success_message
 
     except Exception as e:
