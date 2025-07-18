@@ -128,6 +128,7 @@ def create_user_management_section():
                         html.P("This leaderboard now uses your SQL warehouse for storage and real-time updates."),
                         html.P("📋 Steps to initialize:"),
                         html.Ol([
+                            html.Li("Enter your workspace connection details including catalog name"),
                             html.Li("Create a SQL warehouse in the Infrastructure section above"),
                             html.Li("Click 'Initialize Leaderboard Database' to store all participants"),
                             html.Li("View live leaderboard powered by your SQL warehouse")
@@ -137,7 +138,7 @@ def create_user_management_section():
                     html.H6("🔧 For Workshop Facilitators:", className="text-primary"),
                     html.P([
                         "Update participant scores with SQL: ",
-                        html.Code("UPDATE default.workshop_leaderboard SET score = score + 10 WHERE email = 'participant@company.com'")
+                        html.Code("UPDATE <catalog>.workshop_leaderboard SET score = score + 10 WHERE email = 'participant@company.com'")
                     ], className="small text-muted")
                 ], color="info", className="mb-3"),
                     
@@ -184,7 +185,19 @@ app.layout = html.Div([
                             placeholder="dapi1234567890abcdef",
                             className="mb-3"
                         ),
-                        dbc.FormText("Need Admin permissions to create warehouses and fetch users", className="text-warning")
+                        dbc.Label("Catalog Name", html_for="catalog-name"),
+                        dbc.Input(
+                            id="catalog-name",
+                            type="text",
+                            placeholder="main",
+                            value="main",
+                            className="mb-3"
+                        ),
+                        dbc.FormText([
+                            "Need Admin permissions to create warehouses and fetch users", 
+                            html.Br(),
+                            "Catalog will be created if it doesn't exist (defaults to 'main')"
+                        ], className="text-warning")
                     ])
                 ])
             ], width=6),
@@ -336,9 +349,10 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
      Output("fetch-users-message", "children")],
     Input("fetch-users-btn", "n_clicks"),
     [State("hostname", "value"),
-     State("access-token", "value")]
+     State("access-token", "value"),
+     State("catalog-name", "value")]
 )
-def fetch_users_from_scim(n_clicks, hostname, access_token):
+def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
     """Fetch users from Databricks workspace using the official SDK users.list() method."""
     logger.info(f"=== FETCH USERS CALLBACK START ===")
     logger.info(f"n_clicks={n_clicks}, hostname_provided={hostname is not None}, token_provided={access_token is not None}")
@@ -360,6 +374,10 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         logger.warning(error_msg)
         logger.info(f"Returning validation error: {error_msg}")
         return "", dbc.Alert(error_msg, color="danger")
+    
+    # Default catalog name if not provided
+    catalog_name = catalog_name or "main"
+    logger.info(f"Using catalog: {catalog_name}")
     
     # Test return to verify callback is working
     logger.info("✅ Validation passed, proceeding with user fetch")
@@ -586,7 +604,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         logger.info(f"Created DataFrame with {len(participants_df)} participants")
         
         # Create dedicated serverless warehouse for leaderboard
-        warehouse_result = create_leaderboard_warehouse(hostname, access_token)
+        warehouse_result = create_leaderboard_warehouse(hostname, access_token, catalog_name)
         
         if warehouse_result['success']:
             # Store DataFrame in the newly created warehouse
@@ -594,16 +612,18 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 participants_df, 
                 hostname, 
                 access_token, 
-                warehouse_result['warehouse_id']
+                warehouse_result['warehouse_id'],
+                catalog_name
             )
             
             if storage_result['success']:
                 # Query the warehouse to populate the UI
-                leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, warehouse_result['warehouse_id'])
+                leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, warehouse_result['warehouse_id'], catalog_name)
                 success_message = dbc.Alert([
                     html.H6("🏆 Leaderboard Database Initialized Successfully!", className="alert-heading"),
                     html.P(f"✅ Created dedicated serverless warehouse: {warehouse_result['warehouse_name']}"),
                     html.P(f"⚙️ Configuration: XL size, 8-hour autostop, serverless"),
+                    html.P(f"🗃️ Using catalog: {catalog_name}"),
                     html.P(f"📊 Stored {len(users_data)} participants in table: {storage_result['table_name']}"),
                     html.P("🎯 Real-time leaderboard is now ready for workshop activities!")
                 ], color="success")
@@ -718,10 +738,11 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
     [Input("leaderboard-refresh-interval", "n_intervals"),
      Input("refresh-leaderboard-btn", "n_clicks")],
     [State("hostname", "value"),
-     State("access-token", "value")],
+     State("access-token", "value"),
+     State("catalog-name", "value")],
     prevent_initial_call=True
 )
-def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token):
+def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token, catalog_name):
     """Auto-refresh the leaderboard every 30 seconds or when refresh button is clicked."""
     try:
         logger.info(f"Auto-refreshing leaderboard: intervals={n_intervals}, clicks={refresh_clicks}")
@@ -733,8 +754,11 @@ def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token
                        className="text-muted text-center")
             ])
         
+        # Default catalog name if not provided
+        catalog_name = catalog_name or "main"
+        
         # Try to refresh the leaderboard from warehouse
-        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token)
+        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name)
         logger.info("Leaderboard auto-refresh successful")
         return leaderboard_ui
         
@@ -835,13 +859,28 @@ def stop_and_delete_all_warehouses(n_clicks, hostname, access_token):
         return dbc.Alert(f"❌ Error managing warehouses: {str(e)}", color="danger")
 
 
-def create_leaderboard_warehouse(hostname, access_token):
+def create_leaderboard_warehouse(hostname, access_token, catalog_name):
     """Create a dedicated serverless XL warehouse for the leaderboard."""
     try:
         logger.info("Creating dedicated serverless warehouse for leaderboard")
         
         # Create Databricks WorkspaceClient
         workspace_client = WorkspaceClient(host=hostname, token=access_token)
+        
+        # Create catalog if it doesn't exist
+        try:
+            logger.info(f"Ensuring catalog '{catalog_name}' exists")
+            # First check if catalog exists
+            try:
+                catalog_info = workspace_client.catalogs.get(catalog_name)
+                logger.info(f"Catalog '{catalog_name}' already exists")
+            except Exception:
+                # Catalog doesn't exist, create it
+                logger.info(f"Creating catalog '{catalog_name}'")
+                workspace_client.catalogs.create(name=catalog_name)
+                logger.info(f"Successfully created catalog '{catalog_name}'")
+        except Exception as e:
+            logger.warning(f"Could not create catalog '{catalog_name}': {str(e)}. Proceeding with existing catalog.")
         
         # Import required classes for warehouse creation
         from databricks.sdk.service.sql import CreateWarehouseRequest, EndpointInfoWarehouseType
@@ -901,7 +940,7 @@ def create_leaderboard_warehouse(hostname, access_token):
         }
 
 
-def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None):
+def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None, catalog_name="main"):
     """Store the leaderboard DataFrame in the specified SQL warehouse."""
     try:
         logger.info(f"Storing leaderboard DataFrame with {len(df)} participants in warehouse")
@@ -944,7 +983,7 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
         
         # Create the database table name
         table_name = "workshop_leaderboard"
-        database_name = "default"
+        database_name = catalog_name
         full_table_name = f"{database_name}.{table_name}"
         
         # Create the SQL table
@@ -1028,7 +1067,7 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
         }
 
 
-def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None):
+def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, catalog_name="main"):
     """Query the leaderboard from the SQL warehouse and return UI components."""
     try:
         logger.info("Querying leaderboard from warehouse")
@@ -1054,9 +1093,9 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None):
                 raise Exception("No running warehouse found")
         
         # Query the leaderboard (top 50 for UI performance)
-        query_sql = """
+        query_sql = f"""
         SELECT rank, display_name, email, status, score, last_updated
-        FROM default.workshop_leaderboard
+        FROM {catalog_name}.workshop_leaderboard
         ORDER BY rank
         LIMIT 50
         """
