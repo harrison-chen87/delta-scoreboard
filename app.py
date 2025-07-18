@@ -104,21 +104,30 @@ def create_user_management_section():
     """Create the user management section with SCIM API integration."""
     return dbc.Card([
         dbc.CardBody([
-            html.H5("👥 Workshop Participants", className="card-title mb-4"),
-            
-            dbc.Alert([
-                html.I(className="bi bi-info-circle me-2"),
-                "Use the SCIM API to fetch all workspace users who can participate in the workshop"
-            ], color="info", className="mb-3"),
+            html.H5("🏆 Workshop Leaderboard", className="card-title mb-4"),
             
             dbc.Button(
-                [html.I(className="bi bi-people-fill me-2"), "Fetch Users from SCIM API"],
+                [html.I(className="bi bi-people-fill me-2"), "Load Workspace Participants"],
                 id="fetch-users-btn",
                 color="primary",
                 className="mb-3"
             ),
             
-            html.Div(id="users-table-container", className="mt-3"),
+            # Default leaderboard structure - will be replaced by callback
+            html.Div([
+                html.Div([
+                    html.H6([
+                        html.I(className="bi bi-trophy-fill me-2", style={"color": "#ffc107"}),
+                        "Workshop Leaderboard - Ready to Load"
+                    ], className="mb-3 text-center"),
+                    html.P("👆 Click 'Load Workspace Participants' above to populate the leaderboard with users from your Databricks workspace.", 
+                           className="text-muted text-center"),
+                    html.Hr(),
+                    html.P("📊 The leaderboard will show participant rankings, names, emails, active status, and scores.", 
+                           className="text-muted text-center small")
+                ])
+            ], id="users-table-container", className="mt-3"),
+            
             html.Div(id="fetch-users-message", className="text-center mt-3")
         ])
     ])
@@ -536,20 +545,48 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         
         logger.info("🔄 Executing callback return...")
         
-        # SIMPLE TEST: Return basic content to verify callback updates UI
-        simple_test_table = html.Div([
-            html.H4("🧪 SIMPLE TEST: Callback is working!"),
-            html.P("If you see this, the callback mechanism is functioning correctly."),
-            html.P("The issue is likely with the complex table structure."),
-            html.P(f"✅ Found {len(users_data)} users in workspace"),
-            html.P(f"📊 Table created successfully with {len(display_users)} participants")
-        ])
-        simple_success = dbc.Alert("✅ Simple test successful! User processing works correctly.", color="success")
-        logger.info("Returning simple test content instead of complex table")
-        return simple_test_table, simple_success
+        # Create simple leaderboard table with first 10 users
+        simple_participants = users_data[:10]  # Just first 10 to ensure it renders
+        logger.info(f"Creating simple leaderboard with {len(simple_participants)} participants")
         
-        # Complex table disabled for testing
-        # return users_table, success_message
+        # Create simple table rows
+        table_rows = []
+        for i, user in enumerate(simple_participants):
+            table_rows.append(html.Tr([
+                html.Td(f"#{i+1}"),
+                html.Td(user['Display Name']),
+                html.Td(user['Email']),
+                html.Td("✅ Active" if user['Status'] == '✅ Active' else "❌ Inactive"),
+                html.Td("0 pts")
+            ]))
+        
+        # Simple leaderboard table
+        simple_leaderboard = html.Div([
+            html.H6([
+                html.I(className="bi bi-trophy-fill me-2", style={"color": "#ffc107"}),
+                f"Workshop Leaderboard - {len(users_data)} Total Participants"
+            ], className="mb-3"),
+            
+            dbc.Table([
+                html.Thead([
+                    html.Tr([
+                        html.Th("Rank"),
+                        html.Th("Name"),
+                        html.Th("Email"),
+                        html.Th("Status"),
+                        html.Th("Score")
+                    ])
+                ]),
+                html.Tbody(table_rows)
+            ], bordered=True, striped=True, hover=True),
+            
+            html.P(f"Showing first 10 participants out of {len(users_data)} total.", 
+                   className="text-muted small mt-2")
+        ])
+        
+        simple_success = dbc.Alert(f"✅ Loaded {len(users_data)} participants successfully!", color="success")
+        logger.info(f"Returning simple leaderboard with {len(simple_participants)} participants")
+        return simple_leaderboard, simple_success
 
     except Exception as e:
         error_msg = f"❌ Error fetching users with Databricks SDK: {str(e)}"
