@@ -3,11 +3,11 @@
 import dash
 from dash import html, dcc, Input, Output, State, callback, dash_table
 import dash_bootstrap_components as dbc
-import requests
 import json
 import os
 import logging
 from infrastructure.resource_manager import SQLWarehouseManager
+from databricks.sdk import WorkspaceClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -275,35 +275,31 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         return "", dbc.Alert("❌ Please fill in hostname and access token", color="danger")
     
     try:
-        # Construct the SCIM API URL
-        scim_url = f"https://{hostname}/api/2.0/preview/scim/v2/Users"
-        
-        # Headers for the API request
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/scim+json"
-        }
-        
-        # Make the API request
+        # Use Databricks SDK to fetch users
         try:
-            response = requests.get(scim_url, headers=headers, params={'count': 100})
-            response.raise_for_status()
-            data = response.json()
+            workspace_client = WorkspaceClient(
+                host=f"https://{hostname}",
+                token=access_token
+            )
+            
+            # Get all users from the workspace
+            users = list(workspace_client.users.list())
             
             # Process users data
             users_data = []
-            for user in data.get('Resources', []):
-                if user.get('active', False):
-                    email = user.get('emails', [{}])[0].get('value', '')
+            for user in users:
+                if user.active:
+                    email = user.emails[0].value if user.emails else ""
                     users_data.append({
-                        'ID': user.get('id'),
-                        'Display Name': user.get('displayName'),
+                        'ID': user.id,
+                        'Display Name': user.display_name or "",
                         'Email': email,
-                        'Username': user.get('userName'),
-                        'Status': '✅ Active' if user.get('active') else '❌ Inactive'
+                        'Username': user.user_name or "",
+                        'Status': '✅ Active' if user.active else '❌ Inactive'
                     })
-        except requests.exceptions.RequestException:
-            # If API fails, use demo data
+        except Exception as e:
+            logger.warning(f"Failed to fetch users via SDK: {e}")
+            # If SDK fails, use demo data
             users_data = [
                 {
                     'ID': 'user-1',
