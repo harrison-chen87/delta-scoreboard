@@ -11,9 +11,7 @@ from dataclasses import dataclass
 # Try to import Databricks SDK
 try:
     from databricks.sdk import WorkspaceClient
-    from databricks.sdk.service.sql import CreateWarehouseRequest
-    from databricks.sdk.service.sql import WarehouseType
-    from databricks.sdk.service.sql import Channel
+    from databricks.sdk.service.sql import CreateWarehouseRequestWarehouseType, ChannelName, Channel
     HAS_DATABRICKS_SDK = True
 except ImportError:
     HAS_DATABRICKS_SDK = False
@@ -178,29 +176,32 @@ class SQLWarehouseManager:
         try:
             logger.info(f"Creating warehouse '{config.name}' with size '{config.cluster_size}' using Databricks SDK")
             
-            # Create warehouse request using SDK
-            warehouse_request = CreateWarehouseRequest(
+            # Create channel configuration
+            channel = Channel(name=ChannelName.CHANNEL_NAME_CURRENT)
+            
+            # Make the API call using SDK with keyword arguments
+            warehouse_wait = self.workspace_client.warehouses.create(
                 name=config.name,
                 cluster_size=config.cluster_size,
                 auto_stop_mins=config.auto_stop_mins,
                 max_num_clusters=config.max_num_clusters,
-                warehouse_type=WarehouseType.PRO,
+                warehouse_type=CreateWarehouseRequestWarehouseType.PRO,
                 enable_photon=config.enable_photon,
                 enable_serverless_compute=config.enable_serverless_compute,
-                channel=Channel.CHANNEL_NAME_CURRENT
+                channel=channel
             )
             
-            # Make the API call using SDK
-            warehouse = self.workspace_client.warehouses.create(warehouse_request)
+            # Wait for the warehouse to be created
+            warehouse_response = warehouse_wait.result()
             
-            if warehouse.id:
+            if warehouse_response.id:
                 result = WarehouseResult(
                     name=config.name,
-                    id=warehouse.id,
-                    http_path=f"/sql/1.0/warehouses/{warehouse.id}",
+                    id=warehouse_response.id,
+                    http_path=f"/sql/1.0/warehouses/{warehouse_response.id}",
                     success=True
                 )
-                logger.info(f"Successfully created warehouse using SDK: {warehouse.id}")
+                logger.info(f"Successfully created warehouse using SDK: {warehouse_response.id}")
                 return result
             else:
                 error_msg = "No warehouse ID in SDK response"
