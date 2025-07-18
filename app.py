@@ -115,6 +115,9 @@ def create_user_management_section():
                 className="mb-3"
             ),
             
+            # Progress bar for leaderboard initialization
+            html.Div(id="leaderboard-progress", className="mb-3"),
+            
             # Default leaderboard structure - will be replaced by callback
             html.Div([
                 html.Div([
@@ -343,14 +346,35 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
         logger.error(f"Unexpected error in warehouse creation: {str(e)}")
         return dbc.Alert(f"❌ Unexpected error: {str(e)}", color="danger")
 
+# Callback for showing progress bar immediately when button is clicked
+@app.callback(
+    Output("leaderboard-progress", "children"),
+    Input("fetch-users-btn", "n_clicks"),
+    prevent_initial_call=True
+)
+def show_progress_bar(n_clicks):
+    """Show progress bar immediately when initialize button is clicked."""
+    if n_clicks:
+        return dbc.Progress(
+            value=10, 
+            color="info", 
+            label="🚀 Starting initialization...",
+            className="mb-2",
+            style={"height": "30px"}
+        )
+    return ""
+
+
 # Callback for fetching users from SCIM API
 @app.callback(
     [Output("users-table-container", "children"),
-     Output("fetch-users-message", "children")],
+     Output("fetch-users-message", "children"),
+     Output("leaderboard-progress", "children", allow_duplicate=True)],
     Input("fetch-users-btn", "n_clicks"),
     [State("hostname", "value"),
      State("access-token", "value"),
-     State("catalog-name", "value")]
+     State("catalog-name", "value")],
+    prevent_initial_call=True
 )
 def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
     """Fetch users from Databricks workspace using the official SDK users.list() method."""
@@ -359,7 +383,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
     
     if not n_clicks:
         logger.info("No clicks detected, returning empty values")
-        return "", ""
+        return "", "", ""
     
     # Show loading state immediately
     loading_message = dbc.Alert([
@@ -373,7 +397,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
         error_msg = "❌ Please fill in hostname and access token"
         logger.warning(error_msg)
         logger.info(f"Returning validation error: {error_msg}")
-        return "", dbc.Alert(error_msg, color="danger")
+        return "", dbc.Alert(error_msg, color="danger"), ""
     
     # Default catalog name if not provided
     catalog_name = catalog_name or "main"
@@ -629,7 +653,17 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
                 ], color="success")
                 
                 logger.info(f"Successfully created warehouse and stored leaderboard")
-                return leaderboard_ui, success_message
+                
+                # Show completion progress
+                completion_progress = dbc.Progress(
+                    value=100, 
+                    color="success", 
+                    label="✅ Leaderboard initialization complete!",
+                    className="mb-2",
+                    style={"height": "30px"}
+                )
+                
+                return leaderboard_ui, success_message, completion_progress
             else:
                 # Warehouse created but storage failed
                 error_message = dbc.Alert([
@@ -640,7 +674,17 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
                 ], color="warning")
                 
                 fallback_table = create_simple_leaderboard_table(users_data[:20])
-                return fallback_table, error_message
+                
+                # Show error progress
+                error_progress = dbc.Progress(
+                    value=70, 
+                    color="warning", 
+                    label="⚠️ Partial completion - warehouse created",
+                    className="mb-2",
+                    style={"height": "30px"}
+                )
+                
+                return fallback_table, error_message, error_progress
         else:
             # Warehouse creation failed
             error_message = dbc.Alert([
@@ -651,7 +695,17 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
             
             # Create simple fallback table
             fallback_table = create_simple_leaderboard_table(users_data[:20])
-            return fallback_table, error_message
+            
+            # Show error progress
+            error_progress = dbc.Progress(
+                value=30, 
+                color="danger", 
+                label="❌ Warehouse creation failed",
+                className="mb-2",
+                style={"height": "30px"}
+            )
+            
+            return fallback_table, error_message, error_progress
 
     except Exception as e:
         error_msg = f"❌ Error fetching users with Databricks SDK: {str(e)}"
@@ -729,7 +783,16 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
             html.P("Check logs for detailed error information.")
         ], color="warning")
         
-        return users_table, error_alert
+        # Show error progress
+        error_progress = dbc.Progress(
+            value=20, 
+            color="danger", 
+            label="❌ SDK error - showing demo data",
+            className="mb-2",
+            style={"height": "30px"}
+        )
+        
+        return users_table, error_alert, error_progress
 
 
 # Callback for auto-refreshing the leaderboard
@@ -864,8 +927,26 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
     try:
         logger.info("Creating dedicated serverless warehouse for leaderboard")
         
-        # Create Databricks WorkspaceClient
-        workspace_client = WorkspaceClient(host=hostname, token=access_token)
+        # Create Databricks WorkspaceClient with explicit PAT authentication
+        # Clear any OAuth environment variables that might interfere
+        import os
+        oauth_env_vars = ['DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET', 'DATABRICKS_OAUTH_TOKEN']
+        original_env = {}
+        for var in oauth_env_vars:
+            if var in os.environ:
+                original_env[var] = os.environ[var]
+                del os.environ[var]
+        
+        try:
+            workspace_client = WorkspaceClient(
+                host=hostname, 
+                token=access_token,
+                auth_type="pat"  # Explicitly set to Personal Access Token
+            )
+        finally:
+            # Restore original environment variables
+            for var, value in original_env.items():
+                os.environ[var] = value
         
         # Create catalog if it doesn't exist
         try:
@@ -945,8 +1026,26 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
     try:
         logger.info(f"Storing leaderboard DataFrame with {len(df)} participants in warehouse")
         
-        # Create Databricks WorkspaceClient
-        workspace_client = WorkspaceClient(host=hostname, token=access_token)
+        # Create Databricks WorkspaceClient with explicit PAT authentication
+        # Clear any OAuth environment variables that might interfere
+        import os
+        oauth_env_vars = ['DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET', 'DATABRICKS_OAUTH_TOKEN']
+        original_env = {}
+        for var in oauth_env_vars:
+            if var in os.environ:
+                original_env[var] = os.environ[var]
+                del os.environ[var]
+        
+        try:
+            workspace_client = WorkspaceClient(
+                host=hostname, 
+                token=access_token,
+                auth_type="pat"  # Explicitly set to Personal Access Token
+            )
+        finally:
+            # Restore original environment variables
+            for var, value in original_env.items():
+                os.environ[var] = value
         
         # Use specified warehouse or find a running one
         if warehouse_id:
@@ -1072,8 +1171,26 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
     try:
         logger.info("Querying leaderboard from warehouse")
         
-        # Create Databricks WorkspaceClient
-        workspace_client = WorkspaceClient(host=hostname, token=access_token)
+        # Create Databricks WorkspaceClient with explicit PAT authentication
+        # Clear any OAuth environment variables that might interfere
+        import os
+        oauth_env_vars = ['DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET', 'DATABRICKS_OAUTH_TOKEN']
+        original_env = {}
+        for var in oauth_env_vars:
+            if var in os.environ:
+                original_env[var] = os.environ[var]
+                del os.environ[var]
+        
+        try:
+            workspace_client = WorkspaceClient(
+                host=hostname, 
+                token=access_token,
+                auth_type="pat"  # Explicitly set to Personal Access Token
+            )
+        finally:
+            # Restore original environment variables
+            for var, value in original_env.items():
+                os.environ[var] = value
         
         # Use specified warehouse or find a running one
         if warehouse_id:
