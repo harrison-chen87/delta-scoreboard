@@ -6,6 +6,12 @@ import dash_bootstrap_components as dbc
 import requests
 import json
 import os
+import logging
+from infrastructure.resource_manager import SQLWarehouseManager
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize Dash app for Databricks deployment
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -172,7 +178,7 @@ app.layout = html.Div([
      State("warehouse-count", "value")]
 )
 def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, cluster_size, auto_stop, warehouse_count):
-    """Handle serverless SQL warehouse creation."""
+    """Handle serverless SQL warehouse creation using the resource manager."""
     if not n_clicks:
         return ""
     
@@ -181,87 +187,75 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
         return dbc.Alert("❌ Please fill in all required fields", color="danger")
     
     try:
-        # Construct the API URL
-        api_url = f"https://{hostname}/api/2.0/sql/warehouses"
+        # Initialize the SQL warehouse manager
+        warehouse_manager = SQLWarehouseManager(hostname, access_token)
+        
+        # Create warehouses using the resource manager
+        logger.info(f"Creating {warehouse_count} warehouse(s) with name '{warehouse_name}' and size '{cluster_size}'")
+        results = warehouse_manager.create_multiple_warehouses(
+            base_name=warehouse_name,
+            cluster_size=cluster_size,
+            auto_stop_mins=auto_stop,
+            count=warehouse_count
+        )
+        
+        # Process results
+        successful_warehouses = [r for r in results if r.success]
+        failed_warehouses = [r for r in results if not r.success]
         
         # Convert minutes to hours for display
         auto_stop_hours = auto_stop // 60
         
-        # Create multiple warehouses if requested
-        created_warehouses = []
-        
-        for i in range(warehouse_count):
-            # Generate warehouse name with suffix if creating multiple
-            if warehouse_count > 1:
-                current_warehouse_name = f"{warehouse_name}-{i+1}"
-            else:
-                current_warehouse_name = warehouse_name
+        if successful_warehouses:
+            # Create success message
+            success_count = len(successful_warehouses)
+            success_title = f"✅ {success_count} Serverless SQL Warehouse{'s' if success_count > 1 else ''} Created Successfully!"
             
-            # Prepare the request payload for serverless warehouse
-            payload = {
-                "name": current_warehouse_name,
-                "cluster_size": cluster_size,
-                "auto_stop_mins": auto_stop,
-                "max_num_clusters": 1,  # Fixed at 1 for serverless
-                "warehouse_type": "PRO",  # Serverless
-                "enable_photon": True,  # Enable Photon for better performance
-                "enable_serverless_compute": True,  # Enable serverless
-                "channel": {
-                    "name": "CHANNEL_NAME_CURRENT"
-                }
-            }
+            warehouse_details = []
+            for i, warehouse in enumerate(successful_warehouses):
+                warehouse_details.extend([
+                    html.H6(f"Warehouse {i+1}:", className="text-success mt-2"),
+                    html.P(f"Name: {warehouse.name}"),
+                    html.P(f"ID: {warehouse.id}"),
+                    html.P(f"HTTP Path: {warehouse.http_path}")
+                ])
             
-            # Headers for the API request
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
+            # Add error details if some failed
+            if failed_warehouses:
+                warehouse_details.append(html.Hr())
+                warehouse_details.append(html.H6("⚠️ Some warehouses failed to create:", className="text-warning"))
+                for failed in failed_warehouses:
+                    warehouse_details.extend([
+                        html.P(f"Failed: {failed.name} - {failed.error}", className="text-danger small")
+                    ])
             
-            # Make the API request
-            try:
-                response = requests.post(api_url, json=payload, headers=headers)
-                response.raise_for_status()
-                warehouse_data = response.json()
-                warehouse_id = warehouse_data.get("id")
-                
-                created_warehouses.append({
-                    "name": current_warehouse_name,
-                    "id": warehouse_id,
-                    "http_path": f"/sql/1.0/warehouses/{warehouse_id}"
-                })
-            except requests.exceptions.RequestException as e:
-                # If API fails, use demo mode
-                warehouse_id = f"demo-serverless-warehouse-id-{i+1}"
-                created_warehouses.append({
-                    "name": current_warehouse_name,
-                    "id": warehouse_id,
-                    "http_path": f"/sql/1.0/warehouses/{warehouse_id}"
-                })
+            return dbc.Alert([
+                html.H6(success_title, className="alert-heading"),
+                html.P(f"Size: {cluster_size}"),
+                html.P(f"Type: Serverless (PRO)"),
+                html.P(f"Auto-stop: {auto_stop_hours} hours"),
+                html.Hr(),
+                html.H6("📋 Connection Details:", className="text-success"),
+                *warehouse_details
+            ], color="success" if not failed_warehouses else "warning")
         
-        # Create success message
-        success_title = f"✅ {warehouse_count} Serverless SQL Warehouse{'s' if warehouse_count > 1 else ''} Created Successfully!"
-        
-        warehouse_details = []
-        for i, warehouse in enumerate(created_warehouses):
-            warehouse_details.extend([
-                html.H6(f"Warehouse {i+1}:", className="text-success mt-2"),
-                html.P(f"Name: {warehouse['name']}"),
-                html.P(f"ID: {warehouse['id']}"),
-                html.P(f"HTTP Path: {warehouse['http_path']}")
-            ])
-        
-        return dbc.Alert([
-            html.H6(success_title, className="alert-heading"),
-            html.P(f"Size: {cluster_size}"),
-            html.P(f"Type: Serverless (PRO)"),
-            html.P(f"Auto-stop: {auto_stop_hours} hours"),
-            html.Hr(),
-            html.H6("📋 Connection Details:", className="text-success"),
-            *warehouse_details
-        ], color="success")
+        else:
+            # All warehouses failed
+            error_details = []
+            for failed in failed_warehouses:
+                error_details.append(html.P(f"• {failed.name}: {failed.error}"))
+            
+            return dbc.Alert([
+                html.H6("❌ All Warehouse Creation Failed", className="alert-heading"),
+                html.P("The following errors occurred:"),
+                *error_details,
+                html.Hr(),
+                html.P("Please check your credentials and try again.", className="small text-muted")
+            ], color="danger")
         
     except Exception as e:
-        return dbc.Alert(f"❌ Error creating warehouse: {str(e)}", color="danger")
+        logger.error(f"Unexpected error in warehouse creation: {str(e)}")
+        return dbc.Alert(f"❌ Unexpected error: {str(e)}", color="danger")
 
 # Callback for fetching users from SCIM API
 @app.callback(
@@ -384,4 +378,4 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
 # For Databricks Apps deployment
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
-    app.run_server(debug=False, host="0.0.0.0", port=port) 
+    app.run(debug=False, host="0.0.0.0", port=port) 

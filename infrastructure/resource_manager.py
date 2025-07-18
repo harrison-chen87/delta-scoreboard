@@ -1,0 +1,265 @@
+"""Resource manager for SQL warehouse creation and management."""
+
+import logging
+import requests
+import json
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@dataclass
+class WarehouseConfig:
+    """Configuration for SQL warehouse creation."""
+    name: str
+    cluster_size: str
+    auto_stop_mins: int = 240
+    max_num_clusters: int = 1
+    warehouse_type: str = "PRO"
+    enable_photon: bool = True
+    enable_serverless_compute: bool = True
+
+@dataclass
+class WarehouseResult:
+    """Result of warehouse creation."""
+    name: str
+    id: str
+    http_path: str
+    success: bool
+    error: Optional[str] = None
+
+class SQLWarehouseManager:
+    """Manages SQL warehouse creation and operations."""
+    
+    def __init__(self, hostname: str, access_token: str):
+        """
+        Initialize the SQL warehouse manager.
+        
+        Args:
+            hostname: Databricks workspace hostname
+            access_token: Databricks access token
+        """
+        self.hostname = hostname
+        self.access_token = access_token
+        self.base_url = f"https://{hostname}/api/2.0/sql/warehouses"
+        self.headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        logger.info(f"Initialized SQL Warehouse Manager for {hostname}")
+    
+    def create_warehouse(self, config: WarehouseConfig) -> WarehouseResult:
+        """
+        Create a single SQL warehouse.
+        
+        Args:
+            config: Warehouse configuration
+            
+        Returns:
+            WarehouseResult with creation details
+        """
+        try:
+            # Prepare the request payload
+            payload = {
+                "name": config.name,
+                "cluster_size": config.cluster_size,
+                "auto_stop_mins": config.auto_stop_mins,
+                "max_num_clusters": config.max_num_clusters,
+                "warehouse_type": config.warehouse_type,
+                "enable_photon": config.enable_photon,
+                "enable_serverless_compute": config.enable_serverless_compute,
+                "channel": {
+                    "name": "CHANNEL_NAME_CURRENT"
+                }
+            }
+            
+            logger.info(f"Creating warehouse '{config.name}' with size '{config.cluster_size}'")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
+            
+            # Make the API request
+            response = requests.post(
+                self.base_url,
+                json=payload,
+                headers=self.headers,
+                timeout=30
+            )
+            
+            # Log the response for debugging
+            logger.info(f"API Response Status: {response.status_code}")
+            logger.debug(f"API Response Headers: {dict(response.headers)}")
+            
+            if response.status_code == 200:
+                warehouse_data = response.json()
+                warehouse_id = warehouse_data.get("id")
+                
+                if warehouse_id:
+                    result = WarehouseResult(
+                        name=config.name,
+                        id=warehouse_id,
+                        http_path=f"/sql/1.0/warehouses/{warehouse_id}",
+                        success=True
+                    )
+                    logger.info(f"Successfully created warehouse: {warehouse_id}")
+                    return result
+                else:
+                    error_msg = "No warehouse ID in response"
+                    logger.error(f"Error creating warehouse: {error_msg}")
+                    return WarehouseResult(
+                        name=config.name,
+                        id="",
+                        http_path="",
+                        success=False,
+                        error=error_msg
+                    )
+            else:
+                error_msg = f"API request failed with status {response.status_code}"
+                try:
+                    error_details = response.json()
+                    error_msg += f": {error_details.get('message', 'Unknown error')}"
+                    logger.error(f"API Error Details: {json.dumps(error_details, indent=2)}")
+                except:
+                    error_msg += f": {response.text}"
+                    
+                logger.error(f"Error creating warehouse: {error_msg}")
+                return WarehouseResult(
+                    name=config.name,
+                    id="",
+                    http_path="",
+                    success=False,
+                    error=error_msg
+                )
+                
+        except requests.exceptions.Timeout:
+            error_msg = "Request timeout - API call took too long"
+            logger.error(f"Error creating warehouse: {error_msg}")
+            return WarehouseResult(
+                name=config.name,
+                id="",
+                http_path="",
+                success=False,
+                error=error_msg
+            )
+        except requests.exceptions.ConnectionError:
+            error_msg = "Connection error - unable to reach Databricks API"
+            logger.error(f"Error creating warehouse: {error_msg}")
+            return WarehouseResult(
+                name=config.name,
+                id="",
+                http_path="",
+                success=False,
+                error=error_msg
+            )
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Request failed: {str(e)}"
+            logger.error(f"Error creating warehouse: {error_msg}")
+            return WarehouseResult(
+                name=config.name,
+                id="",
+                http_path="",
+                success=False,
+                error=error_msg
+            )
+        except Exception as e:
+            error_msg = f"Unexpected error: {str(e)}"
+            logger.error(f"Error creating warehouse: {error_msg}")
+            return WarehouseResult(
+                name=config.name,
+                id="",
+                http_path="",
+                success=False,
+                error=error_msg
+            )
+    
+    def create_multiple_warehouses(self, base_name: str, cluster_size: str, auto_stop_mins: int, count: int) -> List[WarehouseResult]:
+        """
+        Create multiple SQL warehouses.
+        
+        Args:
+            base_name: Base name for warehouses
+            cluster_size: T-shirt size for warehouses
+            auto_stop_mins: Auto-stop time in minutes
+            count: Number of warehouses to create
+            
+        Returns:
+            List of WarehouseResult objects
+        """
+        results = []
+        
+        for i in range(count):
+            if count > 1:
+                warehouse_name = f"{base_name}-{i+1}"
+            else:
+                warehouse_name = base_name
+            
+            config = WarehouseConfig(
+                name=warehouse_name,
+                cluster_size=cluster_size,
+                auto_stop_mins=auto_stop_mins
+            )
+            
+            result = self.create_warehouse(config)
+            results.append(result)
+            
+            # Add a small delay between requests to avoid rate limiting
+            import time
+            time.sleep(1)
+        
+        return results
+    
+    def list_warehouses(self) -> List[Dict[str, Any]]:
+        """
+        List all SQL warehouses in the workspace.
+        
+        Returns:
+            List of warehouse information dictionaries
+        """
+        try:
+            response = requests.get(
+                self.base_url,
+                headers=self.headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                warehouses = data.get("warehouses", [])
+                logger.info(f"Found {len(warehouses)} warehouses")
+                return warehouses
+            else:
+                logger.error(f"Failed to list warehouses: {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error listing warehouses: {str(e)}")
+            return []
+    
+    def delete_warehouse(self, warehouse_id: str) -> bool:
+        """
+        Delete a SQL warehouse.
+        
+        Args:
+            warehouse_id: ID of the warehouse to delete
+            
+        Returns:
+            True if deletion was successful, False otherwise
+        """
+        try:
+            response = requests.delete(
+                f"{self.base_url}/{warehouse_id}",
+                headers=self.headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Successfully deleted warehouse: {warehouse_id}")
+                return True
+            else:
+                logger.error(f"Failed to delete warehouse {warehouse_id}: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error deleting warehouse {warehouse_id}: {str(e)}")
+            return False 

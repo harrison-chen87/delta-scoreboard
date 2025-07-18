@@ -31,6 +31,7 @@ dev = [
 
 [tool.setuptools]
 py-modules = ["app", "main", "main_demo", "config", "databricks_utils", "demo_mode"]
+packages = ["infrastructure"]
 
 [build-system]
 requires = ["setuptools>=45", "wheel"]
