@@ -4,6 +4,7 @@ import logging
 import requests
 import json
 import os
+import sys
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
@@ -60,23 +61,48 @@ class SQLWarehouseManager:
             "Content-Type": "application/json"
         }
         
+        # Debug logging
+        logger.info(f"Initializing SQL Warehouse Manager for {hostname}")
+        logger.info(f"Databricks SDK available: {HAS_DATABRICKS_SDK}")
+        
         # Check if running in Databricks environment
         self.is_databricks_env = self._is_databricks_environment()
-        self.use_sdk = HAS_DATABRICKS_SDK and self.is_databricks_env
+        logger.info(f"Detected Databricks environment: {self.is_databricks_env}")
+        
+        # Always try to use SDK first if available, regardless of environment
+        self.use_sdk = HAS_DATABRICKS_SDK
+        self.workspace_client = None
         
         if self.use_sdk:
             try:
+                # Try to initialize the SDK
                 self.workspace_client = WorkspaceClient(
                     host=f"https://{hostname}",
                     token=access_token
                 )
-                logger.info(f"Initialized SQL Warehouse Manager with Databricks SDK for {hostname}")
+                
+                # Test the SDK connection by checking if we can access the client
+                try:
+                    # Simple test - just check if we can access the warehouses property
+                    _ = self.workspace_client.warehouses
+                    logger.info(f"✅ Successfully initialized SQL Warehouse Manager with Databricks SDK for {hostname}")
+                except Exception as sdk_test_error:
+                    logger.warning(f"SDK connection test failed, falling back to HTTP: {sdk_test_error}")
+                    self.use_sdk = False
+                    self.workspace_client = None
+                    
             except Exception as e:
                 logger.warning(f"Failed to initialize Databricks SDK, falling back to HTTP: {e}")
                 self.use_sdk = False
+                self.workspace_client = None
         
         if not self.use_sdk:
-            logger.info(f"Initialized SQL Warehouse Manager with HTTP requests for {hostname}")
+            logger.info(f"🔄 Initialized SQL Warehouse Manager with HTTP requests for {hostname}")
+        
+        logger.info(f"Final configuration - Using SDK: {self.use_sdk}")
+        
+        # Additional debugging for environment variables
+        self._log_environment_info()
     
     def _is_databricks_environment(self) -> bool:
         """Check if running in a Databricks environment."""
@@ -85,7 +111,9 @@ class SQLWarehouseManager:
             'DATABRICKS_RUNTIME_VERSION',
             'DATABRICKS_TOKEN',
             'DB_HOME',
-            'DATABRICKS_ROOT_VIRTUALENV_ENV'
+            'DATABRICKS_ROOT_VIRTUALENV_ENV',
+            'DATABRICKS_WORKSPACE_ID',
+            'DATABRICKS_HOST'
         ]
         
         for var in databricks_env_vars:
@@ -94,6 +122,41 @@ class SQLWarehouseManager:
                 return True
         
         return False
+    
+    def _log_environment_info(self):
+        """Log environment information for debugging."""
+        logger.info("=== Environment Debug Information ===")
+        env_vars_to_check = [
+            'DATABRICKS_RUNTIME_VERSION',
+            'DATABRICKS_TOKEN',
+            'DB_HOME',
+            'DATABRICKS_ROOT_VIRTUALENV_ENV',
+            'DATABRICKS_WORKSPACE_ID',
+            'DATABRICKS_HOST',
+            'DATABRICKS_SERVER_HOSTNAME',
+            'DATABRICKS_HTTP_PATH',
+            'DATABRICKS_ACCESS_TOKEN'
+        ]
+        
+        for var in env_vars_to_check:
+            value = os.getenv(var)
+            if value:
+                # Mask sensitive tokens
+                if 'TOKEN' in var or 'ACCESS' in var:
+                    masked_value = f"{value[:10]}..." if len(value) > 10 else "***"
+                    logger.info(f"  {var}: {masked_value}")
+                else:
+                    logger.info(f"  {var}: {value}")
+            else:
+                logger.info(f"  {var}: Not set")
+        
+        logger.info("=== End Environment Debug Information ===")
+        
+        # Also log the current working directory and other system info
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Python executable: {sys.executable}")
+        logger.info(f"User: {os.getenv('USER', 'Unknown')}")
+        logger.info(f"Home: {os.getenv('HOME', 'Unknown')}")
     
     def create_warehouse(self, config: WarehouseConfig) -> WarehouseResult:
         """
