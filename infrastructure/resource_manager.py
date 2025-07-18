@@ -272,4 +272,42 @@ class SQLWarehouseManager:
             logger.error(f"Error deleting warehouse {warehouse_id} with SDK: {str(e)}")
             return False
     
+    def stop_warehouse(self, warehouse_id: str) -> bool:
+        """
+        Stop a SQL warehouse using Databricks SDK.
+        
+        Args:
+            warehouse_id: ID of the warehouse to stop
+            
+        Returns:
+            True if stopping was successful, False otherwise
+        """
+        try:
+            self.workspace_client.warehouses.stop(warehouse_id)
+            logger.info(f"Successfully stopped warehouse using SDK: {warehouse_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error stopping warehouse {warehouse_id} with SDK: {str(e)}")
+            return False
+    
+    def start_warehouse(self, warehouse_id: str) -> bool:
+        """
+        Start a SQL warehouse using Databricks SDK.
+        
+        Args:
+            warehouse_id: ID of the warehouse to start
+            
+        Returns:
+            True if starting was successful, False otherwise
+        """
+        try:
+            self.workspace_client.warehouses.start(warehouse_id)
+            logger.info(f"Successfully started warehouse using SDK: {warehouse_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error starting warehouse {warehouse_id} with SDK: {str(e)}")
+            return False
+    
  

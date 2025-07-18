@@ -115,6 +115,29 @@ def create_user_management_section():
         ])
     ])
 
+def create_warehouse_management_section():
+    """Create the warehouse management section."""
+    return dbc.Card([
+        dbc.CardBody([
+            html.H5("🗂️ Manage SQL Warehouses", className="card-title mb-4"),
+            
+            dbc.Alert([
+                html.I(className="bi bi-info-circle me-2"),
+                "View, stop, and delete SQL warehouses in your workspace"
+            ], color="info", className="mb-3"),
+            
+            dbc.Button(
+                [html.I(className="bi bi-arrow-clockwise me-2"), "Refresh Warehouses"],
+                id="refresh-warehouses-btn",
+                color="info",
+                className="mb-3"
+            ),
+            
+            html.Div(id="warehouses-table-container", className="mt-3"),
+            html.Div(id="warehouse-management-message", className="text-center mt-3")
+        ])
+    ])
+
 app.layout = html.Div([
     html.H1("🏗️ Delta Drive Workshop Setup", className="text-center text-success mb-4"),
     html.Hr(),
@@ -158,11 +181,18 @@ app.layout = html.Div([
         ], className="mb-4"),
         
         dbc.Row([
-            dbc.Col([
-                html.H2("👥 User Management", className="mb-3"),
-                create_user_management_section()
-            ], width=12)
-        ], className="mb-4")
+                            dbc.Col([
+                    html.H2("👥 User Management", className="mb-3"),
+                    create_user_management_section()
+                ], width=12)
+            ], className="mb-4"),
+            
+            dbc.Row([
+                dbc.Col([
+                    html.H2("🗂️ Warehouse Management", className="mb-3"),
+                    create_warehouse_management_section()
+                ], width=12)
+            ], className="mb-4")
     ], fluid=True)
 ])
 
@@ -275,7 +305,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         return "", dbc.Alert("❌ Please fill in hostname and access token", color="danger")
     
     try:
-        # Use Databricks SDK to fetch users
+        # Use Databricks SDK to fetch users via SCIM API
         try:
             # Clean hostname to avoid double https:// prefix
             clean_hostname = hostname.replace("https://", "").replace("http://", "")
@@ -285,59 +315,89 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 auth_type="pat"  # Explicitly set to Personal Access Token authentication
             )
             
-            # Get all users from the workspace
-            users = list(workspace_client.users.list())
-            
-            # Process users data
+            # Try multiple approaches to fetch users
             users_data = []
-            for user in users:
-                if user.active:
-                    email = user.emails[0].value if user.emails else ""
-                    users_data.append({
-                        'ID': user.id,
-                        'Display Name': user.display_name or "",
-                        'Email': email,
-                        'Username': user.user_name or "",
-                        'Status': '✅ Active' if user.active else '❌ Inactive'
-                    })
+            
+            # First, try using the users API
+            try:
+                users = list(workspace_client.users.list())
+                logger.info(f"Successfully fetched {len(users)} users via SDK users.list()")
+                
+                for user in users:
+                    if user.active:
+                        email = user.emails[0].value if user.emails else ""
+                        users_data.append({
+                            'ID': user.id,
+                            'Display Name': user.display_name or "",
+                            'Email': email,
+                            'Username': user.user_name or "",
+                            'Status': '✅ Active' if user.active else '❌ Inactive'
+                        })
+            except Exception as users_api_error:
+                logger.warning(f"Users API failed: {users_api_error}")
+                
+                # Fallback: Try using the account users API
+                try:
+                    account_users = list(workspace_client.account_users.list())
+                    logger.info(f"Successfully fetched {len(account_users)} users via SDK account_users.list()")
+                    
+                    for user in account_users:
+                        if user.active:
+                            email = user.emails[0].value if user.emails else ""
+                            users_data.append({
+                                'ID': user.id,
+                                'Display Name': user.display_name or "",
+                                'Email': email,
+                                'Username': user.user_name or "",
+                                'Status': '✅ Active' if user.active else '❌ Inactive'
+                            })
+                except Exception as account_users_error:
+                    logger.warning(f"Account users API failed: {account_users_error}")
+                    raise Exception("Both users APIs failed")
+                    
+            # If we didn't get any users, show a warning
+            if not users_data:
+                logger.warning("No active users found in workspace")
+                raise Exception("No active users found")
+                
         except Exception as e:
             logger.warning(f"Failed to fetch users via SDK: {e}")
-            # If SDK fails, use demo data
+            # If SDK fails, use demo data with a warning
             users_data = [
                 {
-                    'ID': 'user-1',
+                    'ID': 'demo-user-1',
                     'Display Name': 'John Doe',
                     'Email': 'john.doe@company.com',
                     'Username': 'john.doe@company.com',
-                    'Status': '✅ Active'
+                    'Status': '⚠️ Demo Data'
                 },
                 {
-                    'ID': 'user-2',
+                    'ID': 'demo-user-2',
                     'Display Name': 'Jane Smith',
                     'Email': 'jane.smith@company.com',
                     'Username': 'jane.smith@company.com',
-                    'Status': '✅ Active'
+                    'Status': '⚠️ Demo Data'
                 },
                 {
-                    'ID': 'user-3',
+                    'ID': 'demo-user-3',
                     'Display Name': 'Bob Johnson',
                     'Email': 'bob.johnson@company.com',
                     'Username': 'bob.johnson@company.com',
-                    'Status': '✅ Active'
+                    'Status': '⚠️ Demo Data'
                 },
                 {
-                    'ID': 'user-4',
+                    'ID': 'demo-user-4',
                     'Display Name': 'Alice Brown',
                     'Email': 'alice.brown@company.com',
                     'Username': 'alice.brown@company.com',
-                    'Status': '✅ Active'
+                    'Status': '⚠️ Demo Data'
                 },
                 {
-                    'ID': 'user-5',
+                    'ID': 'demo-user-5',
                     'Display Name': 'Charlie Davis',
                     'Email': 'charlie.davis@company.com',
                     'Username': 'charlie.davis@company.com',
-                    'Status': '✅ Active'
+                    'Status': '⚠️ Demo Data'
                 }
             ]
         
@@ -363,16 +423,205 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
             ])
         ], bordered=True, hover=True, striped=True, className="mt-3")
         
-        success_message = dbc.Alert([
-            html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
-            html.P(f"Retrieved {len(users_data)} active users from workspace"),
-            html.P("These users are eligible to participate in the workshop")
-        ], color="success")
+        # Check if we're showing demo data
+        is_demo_data = any(user.get('Status', '').startswith('⚠️') for user in users_data)
+        
+        if is_demo_data:
+            success_message = dbc.Alert([
+                html.H6("⚠️ Demo Data Displayed", className="alert-heading"),
+                html.P(f"Unable to fetch real users from workspace. Showing {len(users_data)} demo users instead."),
+                html.P("This may be due to permissions or API restrictions in the deployed environment."),
+                html.P("In a real workshop setup, this would show actual workspace users.")
+            ], color="warning")
+        else:
+            success_message = dbc.Alert([
+                html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
+                html.P(f"Retrieved {len(users_data)} active users from workspace"),
+                html.P("These users are eligible to participate in the workshop")
+            ], color="success")
         
         return users_table, success_message
         
     except Exception as e:
         return "", dbc.Alert(f"❌ Error fetching users: {str(e)}", color="danger")
+
+# Callback for refreshing warehouses
+@app.callback(
+    [Output("warehouses-table-container", "children"),
+     Output("warehouse-management-message", "children")],
+    Input("refresh-warehouses-btn", "n_clicks"),
+    [State("hostname", "value"),
+     State("access-token", "value")]
+)
+def refresh_warehouses(n_clicks, hostname, access_token):
+    """Refresh the list of SQL warehouses and display management options."""
+    if not n_clicks:
+        return "", ""
+    
+    # Validate inputs
+    if not all([hostname, access_token]):
+        return "", dbc.Alert("❌ Please fill in hostname and access token", color="danger")
+    
+    try:
+        # Initialize the SQL warehouse manager
+        warehouse_manager = SQLWarehouseManager(hostname, access_token)
+        
+        # Get list of warehouses
+        warehouses = warehouse_manager.list_warehouses()
+        
+        if not warehouses:
+            return "", dbc.Alert("📭 No warehouses found in this workspace", color="info")
+        
+        # Create table with warehouse information and action buttons
+        table_rows = []
+        for warehouse in warehouses:
+            warehouse_id = warehouse.get('id', '')
+            warehouse_name = warehouse.get('name', '')
+            warehouse_state = warehouse.get('state', 'Unknown')
+            warehouse_size = warehouse.get('cluster_size', 'Unknown')
+            warehouse_type = warehouse.get('warehouse_type', 'Unknown')
+            
+            # Create action buttons
+            action_buttons = html.Div([
+                dbc.Button(
+                    "🛑 Stop",
+                    id={"type": "stop-warehouse", "index": warehouse_id},
+                    color="warning",
+                    size="sm",
+                    className="me-2",
+                    disabled=(warehouse_state == "STOPPED")
+                ),
+                dbc.Button(
+                    "🗑️ Delete",
+                    id={"type": "delete-warehouse", "index": warehouse_id},
+                    color="danger",
+                    size="sm"
+                )
+            ])
+            
+            # Color code the state
+            if warehouse_state == "RUNNING":
+                state_badge = dbc.Badge("🟢 Running", color="success")
+            elif warehouse_state == "STOPPED":
+                state_badge = dbc.Badge("🔴 Stopped", color="secondary")
+            elif warehouse_state == "STARTING":
+                state_badge = dbc.Badge("🟡 Starting", color="warning")
+            else:
+                state_badge = dbc.Badge(f"⚪ {warehouse_state}", color="light")
+            
+            table_rows.append(
+                html.Tr([
+                    html.Td(warehouse_name),
+                    html.Td(warehouse_id),
+                    html.Td(state_badge),
+                    html.Td(warehouse_size),
+                    html.Td(warehouse_type),
+                    html.Td(action_buttons)
+                ])
+            )
+        
+        # Create the warehouses table
+        warehouses_table = dbc.Table([
+            html.Thead([
+                html.Tr([
+                    html.Th("Name"),
+                    html.Th("ID"),
+                    html.Th("State"),
+                    html.Th("Size"),
+                    html.Th("Type"),
+                    html.Th("Actions")
+                ])
+            ]),
+            html.Tbody(table_rows)
+        ], bordered=True, hover=True, striped=True, className="mt-3")
+        
+        success_message = dbc.Alert([
+            html.H6("✅ Warehouses Loaded Successfully!", className="alert-heading"),
+            html.P(f"Found {len(warehouses)} warehouses in your workspace"),
+            html.P("Use the action buttons to stop or delete warehouses as needed")
+        ], color="success")
+        
+        return warehouses_table, success_message
+        
+    except Exception as e:
+        logger.error(f"Error refreshing warehouses: {str(e)}")
+        return "", dbc.Alert(f"❌ Error refreshing warehouses: {str(e)}", color="danger")
+
+# Callback for stopping warehouses
+@app.callback(
+    Output("warehouse-management-message", "children", allow_duplicate=True),
+    Input({"type": "stop-warehouse", "index": dash.ALL}, "n_clicks"),
+    [State("hostname", "value"),
+     State("access-token", "value")],
+    prevent_initial_call=True
+)
+def stop_warehouse(n_clicks_list, hostname, access_token):
+    """Stop a SQL warehouse."""
+    if not any(n_clicks_list) or not all([hostname, access_token]):
+        return dash.no_update
+    
+    # Find which button was clicked
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+    
+    # Extract warehouse ID from the triggered button
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    warehouse_id = json.loads(button_id)["index"]
+    
+    try:
+        # Initialize the SQL warehouse manager
+        warehouse_manager = SQLWarehouseManager(hostname, access_token)
+        
+        # Stop the warehouse
+        success = warehouse_manager.stop_warehouse(warehouse_id)
+        
+        if success:
+            return dbc.Alert(f"🛑 Warehouse {warehouse_id} is being stopped...", color="warning")
+        else:
+            return dbc.Alert(f"❌ Failed to stop warehouse {warehouse_id}", color="danger")
+        
+    except Exception as e:
+        logger.error(f"Error stopping warehouse {warehouse_id}: {str(e)}")
+        return dbc.Alert(f"❌ Error stopping warehouse: {str(e)}", color="danger")
+
+# Callback for deleting warehouses
+@app.callback(
+    Output("warehouse-management-message", "children", allow_duplicate=True),
+    Input({"type": "delete-warehouse", "index": dash.ALL}, "n_clicks"),
+    [State("hostname", "value"),
+     State("access-token", "value")],
+    prevent_initial_call=True
+)
+def delete_warehouse(n_clicks_list, hostname, access_token):
+    """Delete a SQL warehouse."""
+    if not any(n_clicks_list) or not all([hostname, access_token]):
+        return dash.no_update
+    
+    # Find which button was clicked
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+    
+    # Extract warehouse ID from the triggered button
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    warehouse_id = json.loads(button_id)["index"]
+    
+    try:
+        # Initialize the SQL warehouse manager
+        warehouse_manager = SQLWarehouseManager(hostname, access_token)
+        
+        # Delete the warehouse
+        success = warehouse_manager.delete_warehouse(warehouse_id)
+        
+        if success:
+            return dbc.Alert(f"🗑️ Warehouse {warehouse_id} has been deleted successfully!", color="success")
+        else:
+            return dbc.Alert(f"❌ Failed to delete warehouse {warehouse_id}", color="danger")
+            
+    except Exception as e:
+        logger.error(f"Error deleting warehouse {warehouse_id}: {str(e)}")
+        return dbc.Alert(f"❌ Error deleting warehouse: {str(e)}", color="danger")
 
 # For Databricks Apps deployment
 if __name__ == "__main__":
