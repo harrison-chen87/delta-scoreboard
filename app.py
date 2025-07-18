@@ -319,6 +319,13 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         logger.info("No clicks detected, returning empty values")
         return "", ""
     
+    # Show loading state immediately
+    loading_message = dbc.Alert([
+        dbc.Spinner(size="sm", className="me-2"),
+        "🔄 Fetching users from workspace... This may take a moment for large workspaces."
+    ], color="info")
+    logger.info("Showing loading state to user")
+    
     # Validate inputs
     if not all([hostname, access_token]):
         error_msg = "❌ Please fill in hostname and access token"
@@ -364,7 +371,9 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         
         for user in users_iterator:
             user_count += 1
-            logger.info(f"Processing user {user_count}: {getattr(user, 'user_name', 'Unknown')}")
+            # Only log progress for first 5 users and every 1000th user
+            if user_count <= 5 or user_count % 1000 == 0:
+                logger.info(f"Processing user {user_count}: {getattr(user, 'user_name', 'Unknown')}")
             
             # Check if user is active (default to True if not specified)
             is_active = getattr(user, 'active', True)
@@ -441,12 +450,15 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 }
             ]
 
-        # Create the users table
-        logger.info(f"Creating users table with {len(users_data)} users")
+        # Create the users table (limit to first 100 for performance)
+        display_limit = 100
+        display_users = users_data[:display_limit]
+        logger.info(f"Creating users table with {len(display_users)} displayed users (out of {len(users_data)} total)")
         
         table_rows = []
-        for i, user in enumerate(users_data):
-            logger.info(f"Creating row {i+1}: {user.get('Display Name', 'No name')} ({user.get('Email', 'No email')})")
+        for i, user in enumerate(display_users):
+            if i < 5:  # Only log first 5 users to avoid spam
+                logger.info(f"Creating row {i+1}: {user.get('Display Name', 'No name')} ({user.get('Email', 'No email')})")
             table_rows.append(
                 html.Tr([
                     html.Td(user['ID'][:12] + "..." if len(user['ID']) > 15 else user['ID']),  # Truncate long IDs
@@ -483,13 +495,21 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 html.P("In a real workshop setup, this would show actual workspace users with their email addresses.")
             ], color="warning")
         else:
-            success_message = dbc.Alert([
-                html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
-                html.P(f"Retrieved {len(users_data)} active users from workspace using Databricks SDK"),
-                html.P("These users are eligible to participate in the workshop. Their email addresses are ready for notifications.")
-            ], color="success")
+            if len(users_data) > display_limit:
+                success_message = dbc.Alert([
+                    html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
+                    html.P(f"Retrieved {len(users_data)} active users from workspace using Databricks SDK"),
+                    html.P(f"📊 Displaying first {display_limit} users for optimal performance. All users are available for workshop participation."),
+                    html.P("These users are eligible to participate in the workshop. Their email addresses are ready for notifications.")
+                ], color="success")
+            else:
+                success_message = dbc.Alert([
+                    html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
+                    html.P(f"Retrieved {len(users_data)} active users from workspace using Databricks SDK"),
+                    html.P("These users are eligible to participate in the workshop. Their email addresses are ready for notifications.")
+                ], color="success")
         
-        logger.info(f"Returning users table with {len(users_data)} users and success message")
+        logger.info(f"Returning users table with {len(display_users)} displayed users (out of {len(users_data)} total) and success message")
         logger.info(f"Users table type: {type(users_table)}")
         logger.info(f"Success message type: {type(success_message)}")
         logger.info(f"First few users: {users_data[:2] if users_data else 'No users'}")
