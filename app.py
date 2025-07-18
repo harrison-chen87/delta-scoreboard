@@ -9,6 +9,9 @@ import logging
 from infrastructure.resource_manager import SQLWarehouseManager
 from databricks.sdk import WorkspaceClient
 
+# Global variable to track created warehouses during session
+created_warehouses = []
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -84,8 +87,16 @@ def create_warehouse_creation_form():
             ),
             dbc.FormText("Create 1-5 warehouses of the same size for load distribution", className="mb-3"),
             
-            dbc.Button("Create Serverless Warehouse(s)", id="create-warehouse-btn", color="success", className="w-100 mb-3"),
-            html.Div(id="warehouse-creation-message", className="text-center")
+            dbc.Row([
+                dbc.Col([
+                    dbc.Button("Create Serverless Warehouse(s)", id="create-warehouse-btn", color="success", className="w-100")
+                ], width=8),
+                dbc.Col([
+                    dbc.Button("🗑️ Stop & Delete All", id="delete-all-warehouses-btn", color="danger", className="w-100")
+                ], width=4)
+            ], className="mb-3"),
+            html.Div(id="warehouse-creation-message", className="text-center"),
+            html.Div(id="warehouse-management-status", className="text-center mt-3")
         ])
     ])
 
@@ -112,28 +123,7 @@ def create_user_management_section():
         ])
     ])
 
-def create_warehouse_management_section():
-    """Create the warehouse management section."""
-    return dbc.Card([
-        dbc.CardBody([
-            html.H5("🗂️ Manage SQL Warehouses", className="card-title mb-4"),
-            
-            dbc.Alert([
-                html.I(className="bi bi-info-circle me-2"),
-                "View, stop, and delete SQL warehouses in your workspace"
-            ], color="info", className="mb-3"),
-            
-            dbc.Button(
-                [html.I(className="bi bi-arrow-clockwise me-2"), "Refresh Warehouses"],
-                id="refresh-warehouses-btn",
-                color="info",
-                className="mb-3"
-            ),
-            
-            html.Div(id="warehouses-table-container", className="mt-3"),
-            html.Div(id="warehouse-management-message", className="text-center mt-3")
-        ])
-    ])
+
 
 app.layout = html.Div([
     html.H1("🏗️ Delta Drive Workshop Setup", className="text-center text-success mb-4"),
@@ -184,12 +174,7 @@ app.layout = html.Div([
                 ], width=12)
             ], className="mb-4"),
             
-            dbc.Row([
-                dbc.Col([
-                    html.H2("🗂️ Warehouse Management", className="mb-3"),
-                    create_warehouse_management_section()
-                ], width=12)
-            ], className="mb-4")
+
     ], fluid=True)
 ])
 
@@ -233,6 +218,13 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
         
         # Create warehouses using the resource manager
         logger.info(f"Creating {warehouse_count} warehouse(s) with name '{warehouse_name}' and size '{cluster_size}'")
+        
+        # Show progress message
+        progress_message = dbc.Alert([
+            dbc.Spinner(size="sm"),
+            f" Creating {warehouse_count} serverless warehouse(s)..."
+        ], color="info")
+        
         results = warehouse_manager.create_multiple_warehouses(
             base_name=warehouse_name,
             cluster_size=cluster_size,
@@ -243,6 +235,15 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
         # Process results
         successful_warehouses = [r for r in results if r.success]
         failed_warehouses = [r for r in results if not r.success]
+        
+        # Store created warehouse IDs in global list for tracking
+        global created_warehouses
+        for warehouse in successful_warehouses:
+            created_warehouses.append({
+                'id': warehouse.id,
+                'name': warehouse.name,
+                'http_path': warehouse.http_path
+            })
         
         # Convert minutes to hours for display
         auto_stop_hours = auto_stop // 60
@@ -277,7 +278,10 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
                 html.P(f"Auto-stop: {auto_stop_hours} hours"),
                 html.Hr(),
                 html.H6("📋 Connection Details:", className="text-success"),
-                *warehouse_details
+                *warehouse_details,
+                html.Hr(),
+                html.P(f"📊 Total warehouses being tracked: {len(created_warehouses)}", className="mb-1"),
+                html.P("Use the red '🗑️ Stop & Delete All' button to clean up all resources when done", className="mb-0 text-muted")
             ], color="success" if not failed_warehouses else "warning")
         
         else:
@@ -323,8 +327,8 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
     
     # Return loading message immediately
     loading_message = dbc.Alert([
-        dbc.Spinner(size="sm", className="me-2"),
-        "Fetching users from SCIM API..."
+        dbc.Spinner(size="sm"),
+        " Fetching users from SCIM API..."
     ], color="info")
     
     try:
@@ -488,183 +492,94 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         logger.error(f"Traceback: {traceback.format_exc()}")
         return "", dbc.Alert(error_msg, color="danger")
 
-# Callback for refreshing warehouses
+# Callback for stopping and deleting all created warehouses
 @app.callback(
-    [Output("warehouses-table-container", "children"),
-     Output("warehouse-management-message", "children")],
-    Input("refresh-warehouses-btn", "n_clicks"),
+    Output("warehouse-management-status", "children"),
+    Input("delete-all-warehouses-btn", "n_clicks"),
     [State("hostname", "value"),
      State("access-token", "value")]
 )
-def refresh_warehouses(n_clicks, hostname, access_token):
-    """Refresh the list of SQL warehouses and display management options."""
+def stop_and_delete_all_warehouses(n_clicks, hostname, access_token):
+    """Stop and delete all warehouses created via the UI."""
     if not n_clicks:
-        return "", ""
+        return ""
     
     # Validate inputs
     if not all([hostname, access_token]):
-        return "", dbc.Alert("❌ Please fill in hostname and access token", color="danger")
+        return dbc.Alert("❌ Please fill in hostname and access token", color="danger")
+    
+    global created_warehouses
+    
+    if not created_warehouses:
+        return dbc.Alert("📭 No warehouses to delete. Create some warehouses first!", color="info")
     
     try:
         # Initialize the SQL warehouse manager
         warehouse_manager = SQLWarehouseManager(hostname, access_token)
         
-        # Get list of warehouses
-        warehouses = warehouse_manager.list_warehouses()
+        # Show progress message
+        warehouse_count = len(created_warehouses)
+        progress_message = dbc.Alert([
+            dbc.Spinner(size="sm"),
+            f" Stopping and deleting {warehouse_count} warehouse(s)..."
+        ], color="warning")
         
-        if not warehouses:
-            return "", dbc.Alert("📭 No warehouses found in this workspace", color="info")
+        # Stop and delete each warehouse
+        deleted_count = 0
+        failed_deletions = []
         
-        # Create table with warehouse information and action buttons
-        table_rows = []
-        for warehouse in warehouses:
-            warehouse_id = warehouse.get('id', '')
-            warehouse_name = warehouse.get('name', '')
-            warehouse_state = warehouse.get('state', 'Unknown')
-            warehouse_size = warehouse.get('cluster_size', 'Unknown')
-            warehouse_type = warehouse.get('warehouse_type', 'Unknown')
-            
-            # Create action buttons
-            action_buttons = html.Div([
-                dbc.Button(
-                    "🛑 Stop",
-                    id={"type": "stop-warehouse", "index": warehouse_id},
-                    color="warning",
-                    size="sm",
-                    className="me-2",
-                    disabled=(warehouse_state == "STOPPED")
-                ),
-                dbc.Button(
-                    "🗑️ Delete",
-                    id={"type": "delete-warehouse", "index": warehouse_id},
-                    color="danger",
-                    size="sm"
-                )
-            ])
-            
-            # Color code the state
-            if warehouse_state == "RUNNING":
-                state_badge = dbc.Badge("🟢 Running", color="success")
-            elif warehouse_state == "STOPPED":
-                state_badge = dbc.Badge("🔴 Stopped", color="secondary")
-            elif warehouse_state == "STARTING":
-                state_badge = dbc.Badge("🟡 Starting", color="warning")
-            else:
-                state_badge = dbc.Badge(f"⚪ {warehouse_state}", color="light")
-            
-            table_rows.append(
-                html.Tr([
-                    html.Td(warehouse_name),
-                    html.Td(warehouse_id),
-                    html.Td(state_badge),
-                    html.Td(warehouse_size),
-                    html.Td(warehouse_type),
-                    html.Td(action_buttons)
-                ])
-            )
+        for warehouse in created_warehouses:
+            try:
+                warehouse_id = warehouse['id']
+                warehouse_name = warehouse['name']
+                
+                # First try to stop the warehouse
+                logger.info(f"Stopping warehouse: {warehouse_name} ({warehouse_id})")
+                warehouse_manager.stop_warehouse(warehouse_id)
+                
+                # Then delete the warehouse
+                logger.info(f"Deleting warehouse: {warehouse_name} ({warehouse_id})")
+                success = warehouse_manager.delete_warehouse(warehouse_id)
+                
+                if success:
+                    deleted_count += 1
+                    logger.info(f"Successfully deleted warehouse: {warehouse_name}")
+                else:
+                    failed_deletions.append(warehouse_name)
+                    logger.error(f"Failed to delete warehouse: {warehouse_name}")
+                    
+            except Exception as e:
+                failed_deletions.append(warehouse['name'])
+                logger.error(f"Error deleting warehouse {warehouse['name']}: {str(e)}")
         
-        # Create the warehouses table
-        warehouses_table = dbc.Table([
-            html.Thead([
-                html.Tr([
-                    html.Th("Name"),
-                    html.Th("ID"),
-                    html.Th("State"),
-                    html.Th("Size"),
-                    html.Th("Type"),
-                    html.Th("Actions")
-                ])
-            ]),
-            html.Tbody(table_rows)
-        ], bordered=True, hover=True, striped=True, className="mt-3")
+        # Clear the created warehouses list
+        created_warehouses.clear()
         
-        success_message = dbc.Alert([
-            html.H6("✅ Warehouses Loaded Successfully!", className="alert-heading"),
-            html.P(f"Found {len(warehouses)} warehouses in your workspace"),
-            html.P("Use the action buttons to stop or delete warehouses as needed")
-        ], color="success")
-        
-        return warehouses_table, success_message
-        
-    except Exception as e:
-        logger.error(f"Error refreshing warehouses: {str(e)}")
-        return "", dbc.Alert(f"❌ Error refreshing warehouses: {str(e)}", color="danger")
-
-# Callback for stopping warehouses
-@app.callback(
-    Output("warehouse-management-message", "children", allow_duplicate=True),
-    Input({"type": "stop-warehouse", "index": dash.ALL}, "n_clicks"),
-    [State("hostname", "value"),
-     State("access-token", "value")],
-    prevent_initial_call=True
-)
-def stop_warehouse(n_clicks_list, hostname, access_token):
-    """Stop a SQL warehouse."""
-    if not any(n_clicks_list) or not all([hostname, access_token]):
-        return dash.no_update
-    
-    # Find which button was clicked
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        return dash.no_update
-    
-    # Extract warehouse ID from the triggered button
-    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    warehouse_id = json.loads(button_id)["index"]
-    
-    try:
-        # Initialize the SQL warehouse manager
-        warehouse_manager = SQLWarehouseManager(hostname, access_token)
-        
-        # Stop the warehouse
-        success = warehouse_manager.stop_warehouse(warehouse_id)
-        
-        if success:
-            return dbc.Alert(f"🛑 Warehouse {warehouse_id} is being stopped...", color="warning")
+        # Return success/error message
+        if deleted_count == warehouse_count:
+            return dbc.Alert([
+                html.H6("✅ All Warehouses Deleted Successfully!", className="alert-heading"),
+                html.P(f"Successfully stopped and deleted {deleted_count} warehouses"),
+                html.P("All resources have been cleaned up")
+            ], color="success")
+        elif deleted_count > 0:
+            return dbc.Alert([
+                html.H6("⚠️ Partial Success", className="alert-heading"),
+                html.P(f"Successfully deleted {deleted_count} out of {warehouse_count} warehouses"),
+                html.P(f"Failed to delete: {', '.join(failed_deletions)}")
+            ], color="warning")
         else:
-            return dbc.Alert(f"❌ Failed to stop warehouse {warehouse_id}", color="danger")
-        
-    except Exception as e:
-        logger.error(f"Error stopping warehouse {warehouse_id}: {str(e)}")
-        return dbc.Alert(f"❌ Error stopping warehouse: {str(e)}", color="danger")
-
-# Callback for deleting warehouses
-@app.callback(
-    Output("warehouse-management-message", "children", allow_duplicate=True),
-    Input({"type": "delete-warehouse", "index": dash.ALL}, "n_clicks"),
-    [State("hostname", "value"),
-     State("access-token", "value")],
-    prevent_initial_call=True
-)
-def delete_warehouse(n_clicks_list, hostname, access_token):
-    """Delete a SQL warehouse."""
-    if not any(n_clicks_list) or not all([hostname, access_token]):
-        return dash.no_update
-    
-    # Find which button was clicked
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        return dash.no_update
-    
-    # Extract warehouse ID from the triggered button
-    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    warehouse_id = json.loads(button_id)["index"]
-    
-    try:
-        # Initialize the SQL warehouse manager
-        warehouse_manager = SQLWarehouseManager(hostname, access_token)
-        
-        # Delete the warehouse
-        success = warehouse_manager.delete_warehouse(warehouse_id)
-        
-        if success:
-            return dbc.Alert(f"🗑️ Warehouse {warehouse_id} has been deleted successfully!", color="success")
-        else:
-            return dbc.Alert(f"❌ Failed to delete warehouse {warehouse_id}", color="danger")
+            return dbc.Alert([
+                html.H6("❌ Deletion Failed", className="alert-heading"),
+                html.P(f"Failed to delete any warehouses"),
+                html.P(f"Failed warehouses: {', '.join(failed_deletions)}")
+            ], color="danger")
             
     except Exception as e:
-        logger.error(f"Error deleting warehouse {warehouse_id}: {str(e)}")
-        return dbc.Alert(f"❌ Error deleting warehouse: {str(e)}", color="danger")
+        logger.error(f"Error in stop_and_delete_all_warehouses: {str(e)}")
+        return dbc.Alert(f"❌ Error managing warehouses: {str(e)}", color="danger")
+
+
 
 # For Databricks Apps deployment
 if __name__ == "__main__":
