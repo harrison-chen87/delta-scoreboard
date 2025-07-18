@@ -321,8 +321,8 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
     
     # Show loading state immediately
     loading_message = dbc.Alert([
-        dbc.Spinner(size="sm", className="me-2"),
-        "🔄 Fetching users from workspace... This may take a moment for large workspaces."
+        dbc.Spinner(size="sm"),
+        " 🔄 Fetching users from workspace... This may take a moment for large workspaces."
     ], color="info")
     logger.info("Showing loading state to user")
     
