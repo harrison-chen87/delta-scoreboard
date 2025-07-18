@@ -855,12 +855,12 @@ def create_leaderboard_warehouse(hostname, access_token):
         warehouse_request = CreateWarehouseRequest(
             name=warehouse_name,
             cluster_size="X-Large",  # XL size as requested
-            warehouse_type=EndpointInfoWarehouseType.SERVERLESS,  # Serverless type
+            warehouse_type=EndpointInfoWarehouseType.PRO,  # PRO type supports serverless
             auto_stop_mins=480,  # 8 hours = 480 minutes
             min_num_clusters=1,
             max_num_clusters=1,
             enable_photon=True,  # Enable Photon for better performance
-            enable_serverless_compute=True
+            enable_serverless_compute=True  # This enables serverless for PRO type
         )
         
         logger.info(f"Creating warehouse: {warehouse_name} (XL, serverless, 8h autostop)")
