@@ -6,7 +6,7 @@ import dash_bootstrap_components as dbc
 import json
 import os
 import logging
-import requests
+
 from infrastructure.resource_manager import SQLWarehouseManager
 from databricks.sdk import WorkspaceClient
 
@@ -312,7 +312,7 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
      State("access-token", "value")]
 )
 def fetch_users_from_scim(n_clicks, hostname, access_token):
-    """Fetch users from SCIM API using REST API and display in table."""
+    """Fetch users from Databricks workspace using the official SDK users.list() method."""
     logger.info(f"Fetch users callback triggered: n_clicks={n_clicks}, hostname={hostname is not None}, access_token={access_token is not None}")
     
     if not n_clicks:
@@ -324,110 +324,73 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         logger.warning(error_msg)
         return "", dbc.Alert(error_msg, color="danger")
     
-    logger.info(f"Fetching users from SCIM API for hostname: {hostname}")
+    logger.info(f"Fetching users from Databricks workspace: {hostname}")
     
     try:
         # Clean hostname to avoid double https:// prefix
         clean_hostname = hostname.replace("https://", "").replace("http://", "")
-        base_url = f"https://{clean_hostname}"
+        logger.info(f"Cleaned hostname: {clean_hostname}")
         
-        # Set up headers for API call
-        headers = {
-            'Authorization': f'Bearer {access_token}',
-            'Content-Type': 'application/json'
-        }
+        # Initialize WorkspaceClient as per official SDK documentation
+        workspace_client = WorkspaceClient(
+            host=f"https://{clean_hostname}",
+            token=access_token,
+            auth_type="pat"
+        )
+        logger.info("WorkspaceClient initialized successfully")
         
-        # Try multiple API endpoints as per Databricks documentation
-        endpoints_to_try = [
-            '/api/2.0/preview/scim/v2/Users',  # SCIM API
-            '/api/2.0/users'  # Users API
-        ]
+        # Use the official SDK users.list() method
+        logger.info("Calling workspace_client.users.list() as per official SDK documentation")
+        users_iterator = workspace_client.users.list(
+            attributes="id,userName,displayName,emails,active",
+            sort_by="userName"
+        )
         
+        # Convert iterator to list and process users
         users_data = []
-        api_success = False
+        user_count = 0
         
-        for endpoint in endpoints_to_try:
-            try:
-                url = f"{base_url}{endpoint}"
-                logger.info(f"Attempting to fetch users from: {url}")
+        for user in users_iterator:
+            user_count += 1
+            logger.info(f"Processing user {user_count}: {getattr(user, 'user_name', 'Unknown')}")
+            
+            # Check if user is active (default to True if not specified)
+            is_active = getattr(user, 'active', True)
+            
+            if is_active:
+                # Extract user information safely
+                user_id = getattr(user, 'id', '')
+                display_name = getattr(user, 'display_name', '')
+                user_name = getattr(user, 'user_name', '')
                 
-                response = requests.get(url, headers=headers, timeout=30)
-                logger.info(f"API Response Status: {response.status_code}")
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    logger.info(f"API Response received: {len(str(data))} characters")
-                    
-                    # Handle SCIM API response format
-                    if 'Resources' in data:
-                        users = data['Resources']
-                        logger.info(f"Found {len(users)} users in SCIM API response")
-                        
-                        for user in users:
-                            if user.get('active', False):
-                                # Extract email from SCIM format
-                                email = ""
-                                if 'emails' in user and user['emails']:
-                                    email = user['emails'][0].get('value', '')
-                                
-                                users_data.append({
-                                    'ID': user.get('id', ''),
-                                    'Display Name': user.get('displayName', ''),
-                                    'Email': email,
-                                    'Username': user.get('userName', ''),
-                                    'Status': '✅ Active'
-                                })
-                    
-                    # Handle Users API response format
-                    elif isinstance(data, list):
-                        users = data
-                        logger.info(f"Found {len(users)} users in Users API response")
-                        
-                        for user in users:
-                            if user.get('active', False):
-                                users_data.append({
-                                    'ID': user.get('id', ''),
-                                    'Display Name': user.get('display_name', ''),
-                                    'Email': user.get('email', ''),
-                                    'Username': user.get('user_name', ''),
-                                    'Status': '✅ Active'
-                                })
-                    
-                    # Handle other response formats
-                    elif 'users' in data:
-                        users = data['users']
-                        logger.info(f"Found {len(users)} users in nested users response")
-                        
-                        for user in users:
-                            if user.get('active', False):
-                                users_data.append({
-                                    'ID': user.get('id', ''),
-                                    'Display Name': user.get('display_name', user.get('displayName', '')),
-                                    'Email': user.get('email', ''),
-                                    'Username': user.get('user_name', user.get('userName', '')),
-                                    'Status': '✅ Active'
-                                })
-                    
-                    if users_data:
-                        api_success = True
-                        logger.info(f"Successfully extracted {len(users_data)} active users from {endpoint}")
-                        break
+                # Extract email from emails array
+                email = ""
+                emails = getattr(user, 'emails', [])
+                if emails and len(emails) > 0:
+                    # Handle both list and ComplexValue formats
+                    first_email = emails[0]
+                    if hasattr(first_email, 'value'):
+                        email = first_email.value
+                    elif isinstance(first_email, dict):
+                        email = first_email.get('value', '')
                     else:
-                        logger.warning(f"No active users found in response from {endpoint}")
-                        
-                else:
-                    logger.warning(f"API call failed with status {response.status_code}: {response.text}")
-                    
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Request failed for {endpoint}: {str(e)}")
-                continue
-            except Exception as e:
-                logger.warning(f"Error processing response from {endpoint}: {str(e)}")
-                continue
+                        email = str(first_email)
+                
+                users_data.append({
+                    'ID': user_id,
+                    'Display Name': display_name,
+                    'Email': email,
+                    'Username': user_name,
+                    'Status': '✅ Active'
+                })
+                
+                logger.info(f"Added active user: {user_name} ({email})")
         
-        # If no API worked, fall back to demo data
-        if not api_success or not users_data:
-            logger.info("All API calls failed, falling back to demo data")
+        logger.info(f"Successfully processed {len(users_data)} active users from {user_count} total users")
+        
+        # If no users found, fall back to demo data
+        if not users_data:
+            logger.warning("No active users found in workspace, falling back to demo data")
             users_data = [
                 {
                     'ID': 'demo-user-1',
@@ -501,7 +464,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         else:
             success_message = dbc.Alert([
                 html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
-                html.P(f"Retrieved {len(users_data)} active users from workspace using Databricks REST API"),
+                html.P(f"Retrieved {len(users_data)} active users from workspace using Databricks SDK"),
                 html.P("These users are eligible to participate in the workshop. Their email addresses are ready for notifications.")
             ], color="success")
         
@@ -509,12 +472,82 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         return users_table, success_message
 
     except Exception as e:
-        error_msg = f"❌ Unexpected error fetching users: {str(e)}"
+        error_msg = f"❌ Error fetching users with Databricks SDK: {str(e)}"
         logger.error(error_msg)
         logger.error(f"Exception type: {type(e)}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
-        return "", dbc.Alert(error_msg, color="danger")
+        
+        # Fall back to demo data on any error
+        logger.info("Falling back to demo data due to SDK error")
+        users_data = [
+            {
+                'ID': 'demo-user-1',
+                'Display Name': 'John Doe',
+                'Email': 'john.doe@company.com',
+                'Username': 'john.doe@company.com',
+                'Status': '⚠️ Demo Data'
+            },
+            {
+                'ID': 'demo-user-2',
+                'Display Name': 'Jane Smith',
+                'Email': 'jane.smith@company.com',
+                'Username': 'jane.smith@company.com',
+                'Status': '⚠️ Demo Data'
+            },
+            {
+                'ID': 'demo-user-3',
+                'Display Name': 'Bob Johnson',
+                'Email': 'bob.johnson@company.com',
+                'Username': 'bob.johnson@company.com',
+                'Status': '⚠️ Demo Data'
+            },
+            {
+                'ID': 'demo-user-4',
+                'Display Name': 'Digital Workshop Admin',
+                'Email': 'admin@company.com',
+                'Username': 'admin@company.com',
+                'Status': '⚠️ Demo Data'
+            },
+            {
+                'ID': 'demo-user-5',
+                'Display Name': 'Charlie Davis',
+                'Email': 'charlie.davis@company.com',
+                'Username': 'charlie.davis@company.com',
+                'Status': '⚠️ Demo Data'
+            }
+        ]
+        
+        # Create the users table with demo data
+        users_table = dbc.Table([
+            html.Thead([
+                html.Tr([
+                    html.Th("👤 User ID"),
+                    html.Th("📝 Display Name"),
+                    html.Th("📧 Email Address"),
+                    html.Th("🔑 Username"),
+                    html.Th("🔄 Status")
+                ])
+            ]),
+            html.Tbody([
+                html.Tr([
+                    html.Td(user['ID'][:12] + "..." if len(user['ID']) > 15 else user['ID']),
+                    html.Td(user['Display Name']),
+                    html.Td(user['Email']),
+                    html.Td(user['Username']),
+                    html.Td(user['Status'])
+                ]) for user in users_data
+            ])
+        ], bordered=True, hover=True, striped=True, className="mt-3")
+
+        error_alert = dbc.Alert([
+            html.H6("⚠️ SDK Error - Demo Data Displayed", className="alert-heading"),
+            html.P(f"SDK Error: {str(e)}"),
+            html.P("Showing demo data instead. In a real workshop, this would show actual workspace users."),
+            html.P("Check logs for detailed error information.")
+        ], color="warning")
+        
+        return users_table, error_alert
 
 # Callback for stopping and deleting all created warehouses
 @app.callback(
