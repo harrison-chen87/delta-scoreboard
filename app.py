@@ -108,9 +108,10 @@ def create_user_management_section():
             html.H5("🏆 Workshop Leaderboard", className="card-title mb-4"),
             
             dbc.Button(
-                [html.I(className="bi bi-database-fill me-2"), "Initialize Leaderboard Database"],
+                [html.I(className="bi bi-database-fill me-2"), "🚀 Create Leaderboard Warehouse & Initialize"],
                 id="fetch-users-btn",
                 color="success",
+                size="lg",
                 className="mb-3"
             ),
             
@@ -131,8 +132,14 @@ def create_user_management_section():
                             html.Li("Click 'Initialize Leaderboard Database' to store all participants"),
                             html.Li("View live leaderboard powered by your SQL warehouse")
                         ]),
-                        html.P("🎯 Scores can be updated directly in the database during workshop activities!")
-                    ], color="info", className="mb-3"),
+                                            html.P("🎯 Scores can be updated directly in the database during workshop activities!"),
+                    html.Hr(),
+                    html.H6("🔧 For Workshop Facilitators:", className="text-primary"),
+                    html.P([
+                        "Update participant scores with SQL: ",
+                        html.Code("UPDATE default.workshop_leaderboard SET score = score + 10 WHERE email = 'participant@company.com'")
+                    ], className="small text-muted")
+                ], color="info", className="mb-3"),
                     
                     html.Hr(),
                     html.P("📊 The leaderboard will show participant rankings, names, emails, active status, and scores from the SQL warehouse.", 
@@ -578,28 +585,49 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         participants_df = pd.DataFrame(df_data)
         logger.info(f"Created DataFrame with {len(participants_df)} participants")
         
-        # Store DataFrame in SQL warehouse
-        warehouse_result = store_leaderboard_in_warehouse(participants_df, hostname, access_token)
+        # Create dedicated serverless warehouse for leaderboard
+        warehouse_result = create_leaderboard_warehouse(hostname, access_token)
         
         if warehouse_result['success']:
-            # Query the warehouse to populate the UI
-            leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token)
-            success_message = dbc.Alert([
-                html.H6("🏆 Leaderboard Initialized Successfully!", className="alert-heading"),
-                html.P(f"✅ Stored {len(users_data)} participants in SQL warehouse"),
-                html.P(f"📊 Database table created: {warehouse_result['table_name']}"),
-                html.P("🎯 Leaderboard is now ready for workshop activities!")
-            ], color="success")
+            # Store DataFrame in the newly created warehouse
+            storage_result = store_leaderboard_in_warehouse(
+                participants_df, 
+                hostname, 
+                access_token, 
+                warehouse_result['warehouse_id']
+            )
             
-            logger.info(f"Successfully stored leaderboard in warehouse and created UI")
-            return leaderboard_ui, success_message
+            if storage_result['success']:
+                # Query the warehouse to populate the UI
+                leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, warehouse_result['warehouse_id'])
+                success_message = dbc.Alert([
+                    html.H6("🏆 Leaderboard Database Initialized Successfully!", className="alert-heading"),
+                    html.P(f"✅ Created dedicated serverless warehouse: {warehouse_result['warehouse_name']}"),
+                    html.P(f"⚙️ Configuration: XL size, 8-hour autostop, serverless"),
+                    html.P(f"📊 Stored {len(users_data)} participants in table: {storage_result['table_name']}"),
+                    html.P("🎯 Real-time leaderboard is now ready for workshop activities!")
+                ], color="success")
+                
+                logger.info(f"Successfully created warehouse and stored leaderboard")
+                return leaderboard_ui, success_message
+            else:
+                # Warehouse created but storage failed
+                error_message = dbc.Alert([
+                    html.H6("⚠️ Warehouse Created but Storage Failed", className="alert-heading"), 
+                    html.P(f"✅ Created warehouse: {warehouse_result['warehouse_name']}"),
+                    html.P(f"❌ Storage error: {storage_result['error']}"),
+                    html.P("Please try initializing again...")
+                ], color="warning")
+                
+                fallback_table = create_simple_leaderboard_table(users_data[:20])
+                return fallback_table, error_message
         else:
-            # Fallback to simple UI display if warehouse storage fails
+            # Warehouse creation failed
             error_message = dbc.Alert([
-                html.H6("⚠️ Warehouse Storage Failed", className="alert-heading"), 
-                html.P(f"❌ {warehouse_result['error']}"),
+                html.H6("❌ Warehouse Creation Failed", className="alert-heading"), 
+                html.P(f"Error: {warehouse_result['error']}"),
                 html.P("Showing participants in memory instead...")
-            ], color="warning")
+            ], color="danger")
             
             # Create simple fallback table
             fallback_table = create_simple_leaderboard_table(users_data[:20])
@@ -682,6 +710,42 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         ], color="warning")
         
         return users_table, error_alert
+
+
+# Callback for auto-refreshing the leaderboard
+@app.callback(
+    Output("users-table-container", "children", allow_duplicate=True),
+    [Input("leaderboard-refresh-interval", "n_intervals"),
+     Input("refresh-leaderboard-btn", "n_clicks")],
+    [State("hostname", "value"),
+     State("access-token", "value")],
+    prevent_initial_call=True
+)
+def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token):
+    """Auto-refresh the leaderboard every 30 seconds or when refresh button is clicked."""
+    try:
+        logger.info(f"Auto-refreshing leaderboard: intervals={n_intervals}, clicks={refresh_clicks}")
+        
+        # Check if we have credentials
+        if not all([hostname, access_token]):
+            return html.Div([
+                html.P("⚠️ Leaderboard auto-refresh requires workspace credentials", 
+                       className="text-muted text-center")
+            ])
+        
+        # Try to refresh the leaderboard from warehouse
+        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token)
+        logger.info("Leaderboard auto-refresh successful")
+        return leaderboard_ui
+        
+    except Exception as e:
+        logger.warning(f"Auto-refresh failed: {str(e)}")
+        # Return current content on error (don't break the UI)
+        return html.Div([
+            html.P(f"⚠️ Auto-refresh temporarily unavailable: {str(e)}", 
+                   className="text-muted text-center small")
+        ])
+
 
 # Callback for stopping and deleting all created warehouses
 @app.callback(
@@ -771,41 +835,112 @@ def stop_and_delete_all_warehouses(n_clicks, hostname, access_token):
         return dbc.Alert(f"❌ Error managing warehouses: {str(e)}", color="danger")
 
 
-def store_leaderboard_in_warehouse(df, hostname, access_token):
-    """Store the leaderboard DataFrame in the SQL warehouse."""
+def create_leaderboard_warehouse(hostname, access_token):
+    """Create a dedicated serverless XL warehouse for the leaderboard."""
+    try:
+        logger.info("Creating dedicated serverless warehouse for leaderboard")
+        
+        # Create Databricks WorkspaceClient
+        workspace_client = WorkspaceClient(host=hostname, token=access_token)
+        
+        # Import required classes for warehouse creation
+        from databricks.sdk.service.sql import CreateWarehouseRequest, EndpointInfoWarehouseType
+        
+        # Generate unique warehouse name
+        import time
+        timestamp = int(time.time())
+        warehouse_name = f"workshop-leaderboard-{timestamp}"
+        
+        # Create warehouse request with serverless XL configuration
+        warehouse_request = CreateWarehouseRequest(
+            name=warehouse_name,
+            cluster_size="X-Large",  # XL size as requested
+            warehouse_type=EndpointInfoWarehouseType.SERVERLESS,  # Serverless type
+            auto_stop_mins=480,  # 8 hours = 480 minutes
+            min_num_clusters=1,
+            max_num_clusters=1,
+            enable_photon=True,  # Enable Photon for better performance
+            enable_serverless_compute=True
+        )
+        
+        logger.info(f"Creating warehouse: {warehouse_name} (XL, serverless, 8h autostop)")
+        
+        # Create the warehouse
+        warehouse = workspace_client.warehouses.create(warehouse_request)
+        warehouse_id = warehouse.id
+        
+        # Start the warehouse
+        logger.info(f"Starting warehouse: {warehouse_id}")
+        workspace_client.warehouses.start(warehouse_id)
+        
+        # Wait for warehouse to be running (with timeout)
+        import time
+        max_wait = 300  # 5 minutes timeout
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait:
+            warehouse_info = workspace_client.warehouses.get(warehouse_id)
+            if warehouse_info.state and warehouse_info.state.name == "RUNNING":
+                logger.info(f"Warehouse {warehouse_name} is now running")
+                break
+            time.sleep(10)  # Wait 10 seconds before checking again
+        else:
+            logger.warning(f"Warehouse {warehouse_name} did not start within timeout")
+        
+        return {
+            'success': True,
+            'warehouse_id': warehouse_id,
+            'warehouse_name': warehouse_name
+        }
+        
+    except Exception as e:
+        logger.error(f"Error creating leaderboard warehouse: {str(e)}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None):
+    """Store the leaderboard DataFrame in the specified SQL warehouse."""
     try:
         logger.info(f"Storing leaderboard DataFrame with {len(df)} participants in warehouse")
         
         # Create Databricks WorkspaceClient
         workspace_client = WorkspaceClient(host=hostname, token=access_token)
         
-        # Check if we have any running warehouses
-        warehouses = workspace_client.warehouses.list()
-        running_warehouse = None
-        
-        for warehouse in warehouses:
-            if warehouse.state and warehouse.state.name == "RUNNING":
-                running_warehouse = warehouse
-                break
-        
-        if not running_warehouse:
-            logger.warning("No running warehouse found, attempting to start one")
-            # Try to start the first available warehouse
+        # Use specified warehouse or find a running one
+        if warehouse_id:
+            running_warehouse = workspace_client.warehouses.get(warehouse_id)
+            logger.info(f"Using specified warehouse: {running_warehouse.name}")
+        else:
+            # Fallback to finding any running warehouse
+            warehouses = workspace_client.warehouses.list()
+            running_warehouse = None
+            
             for warehouse in warehouses:
-                try:
-                    workspace_client.warehouses.start(warehouse.id)
+                if warehouse.state and warehouse.state.name == "RUNNING":
                     running_warehouse = warehouse
-                    logger.info(f"Started warehouse: {warehouse.name}")
                     break
-                except Exception as e:
-                    logger.warning(f"Failed to start warehouse {warehouse.name}: {e}")
-                    continue
-        
-        if not running_warehouse:
-            return {
-                'success': False,
-                'error': 'No SQL warehouse available. Please create a warehouse first.'
-            }
+            
+            if not running_warehouse:
+                logger.warning("No running warehouse found, attempting to start one")
+                # Try to start the first available warehouse
+                for warehouse in warehouses:
+                    try:
+                        workspace_client.warehouses.start(warehouse.id)
+                        running_warehouse = warehouse
+                        logger.info(f"Started warehouse: {warehouse.name}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to start warehouse {warehouse.name}: {e}")
+                        continue
+            
+            if not running_warehouse:
+                return {
+                    'success': False,
+                    'error': 'No SQL warehouse available. Please create a warehouse first.'
+                }
         
         # Create the database table name
         table_name = "workshop_leaderboard"
@@ -893,7 +1028,7 @@ def store_leaderboard_in_warehouse(df, hostname, access_token):
         }
 
 
-def query_leaderboard_from_warehouse(hostname, access_token):
+def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None):
     """Query the leaderboard from the SQL warehouse and return UI components."""
     try:
         logger.info("Querying leaderboard from warehouse")
@@ -901,17 +1036,22 @@ def query_leaderboard_from_warehouse(hostname, access_token):
         # Create Databricks WorkspaceClient
         workspace_client = WorkspaceClient(host=hostname, token=access_token)
         
-        # Find running warehouse
-        warehouses = workspace_client.warehouses.list()
-        running_warehouse = None
-        
-        for warehouse in warehouses:
-            if warehouse.state and warehouse.state.name == "RUNNING":
-                running_warehouse = warehouse
-                break
-        
-        if not running_warehouse:
-            raise Exception("No running warehouse found")
+        # Use specified warehouse or find a running one
+        if warehouse_id:
+            running_warehouse = workspace_client.warehouses.get(warehouse_id)
+            logger.info(f"Using specified warehouse: {running_warehouse.name}")
+        else:
+            # Find running warehouse
+            warehouses = workspace_client.warehouses.list()
+            running_warehouse = None
+            
+            for warehouse in warehouses:
+                if warehouse.state and warehouse.state.name == "RUNNING":
+                    running_warehouse = warehouse
+                    break
+            
+            if not running_warehouse:
+                raise Exception("No running warehouse found")
         
         # Query the leaderboard (top 50 for UI performance)
         query_sql = """
@@ -951,29 +1091,56 @@ def query_leaderboard_from_warehouse(hostname, access_token):
             ]))
         
         leaderboard_ui = html.Div([
-            html.H6([
-                html.I(className="bi bi-trophy-fill me-2", style={"color": "#ffc107"}),
-                f"Workshop Leaderboard - Live from SQL Warehouse"
-            ], className="mb-3"),
+            # Header with real-time status
+            html.Div([
+                html.H6([
+                    html.I(className="bi bi-trophy-fill me-2", style={"color": "#ffc107"}),
+                    f"Workshop Leaderboard - Live from SQL Warehouse"
+                ], className="mb-2"),
+                html.Div([
+                    html.Span("🔴 Live", className="badge bg-danger me-2"),
+                    html.Span(f"Updated: {pd.Timestamp.now().strftime('%H:%M:%S')}", 
+                             className="text-muted small"),
+                    dbc.Button("🔄 Refresh Now", id="refresh-leaderboard-btn", 
+                              color="outline-success", size="sm", className="ms-2")
+                ], className="d-flex align-items-center mb-3")
+            ]),
             
-            dbc.Table([
-                html.Thead([
-                    html.Tr([
-                        html.Th("🏆 Rank"),
-                        html.Th("👤 Name"),
-                        html.Th("📧 Email"),
-                        html.Th("📊 Status"),
-                        html.Th("🎯 Score")
-                    ])
-                ]),
-                html.Tbody(table_rows)
-            ], bordered=True, striped=True, hover=True),
+            # Leaderboard table
+            html.Div([
+                dbc.Table([
+                    html.Thead([
+                        html.Tr([
+                            html.Th("🏆 Rank", style={"width": "10%"}),
+                            html.Th("👤 Name", style={"width": "25%"}),
+                            html.Th("📧 Email", style={"width": "30%"}),
+                            html.Th("📊 Status", style={"width": "15%"}),
+                            html.Th("🎯 Score", style={"width": "20%"})
+                        ], style={"background-color": "#f8f9fa"})
+                    ]),
+                    html.Tbody(table_rows, id="leaderboard-tbody")
+                ], bordered=True, striped=True, hover=True, responsive=True)
+            ], style={"max-height": "600px", "overflow-y": "auto"}),
             
-            html.P(f"Showing top {len(leaderboard_data)} participants from SQL warehouse", 
-                   className="text-muted small mt-2"),
-            
-            dbc.Button("Refresh Leaderboard", color="outline-primary", size="sm", className="mt-2")
-        ])
+            # Footer info
+            html.Div([
+                html.P([
+                    html.Span(f"📊 Showing top {len(leaderboard_data)} participants from SQL warehouse", 
+                             className="text-muted small"),
+                    html.Br(),
+                    html.Span("⚡ Real-time updates: Scores refresh automatically when updated in database", 
+                             className="text-info small")
+                ], className="mt-2 mb-2"),
+                
+                # Auto-refresh interval (every 30 seconds)
+                dcc.Interval(
+                    id='leaderboard-refresh-interval',
+                    interval=30*1000,  # 30 seconds in milliseconds
+                    n_intervals=0,
+                    disabled=False
+                )
+            ])
+        ], id="live-leaderboard-container")
         
         logger.info(f"Created leaderboard UI with {len(leaderboard_data)} participants")
         return leaderboard_ui
