@@ -6,6 +6,7 @@ import dash_bootstrap_components as dbc
 import json
 import os
 import logging
+import requests
 from infrastructure.resource_manager import SQLWarehouseManager
 from databricks.sdk import WorkspaceClient
 
@@ -311,7 +312,7 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
      State("access-token", "value")]
 )
 def fetch_users_from_scim(n_clicks, hostname, access_token):
-    """Fetch users from SCIM API and display in table."""
+    """Fetch users from SCIM API using REST API and display in table."""
     logger.info(f"Fetch users callback triggered: n_clicks={n_clicks}, hostname={hostname is not None}, access_token={access_token is not None}")
     
     if not n_clicks:
@@ -325,84 +326,108 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
     
     logger.info(f"Fetching users from SCIM API for hostname: {hostname}")
     
-    # Return loading message immediately
-    loading_message = dbc.Alert([
-        dbc.Spinner(size="sm"),
-        " Fetching users from SCIM API..."
-    ], color="info")
-    
     try:
-        # Use Databricks SDK to fetch users via SCIM API
-        try:
-            logger.info("Starting user fetch process...")
-            
-            # Clean hostname to avoid double https:// prefix
-            clean_hostname = hostname.replace("https://", "").replace("http://", "")
-            logger.info(f"Cleaned hostname: {clean_hostname}")
-            
-            workspace_client = WorkspaceClient(
-                host=f"https://{clean_hostname}",
-                token=access_token,
-                auth_type="pat"  # Explicitly set to Personal Access Token authentication
-            )
-            logger.info("WorkspaceClient initialized successfully")
-            
-            # Try multiple approaches to fetch users
-            users_data = []
-            
-            # First, try using the users API
+        # Clean hostname to avoid double https:// prefix
+        clean_hostname = hostname.replace("https://", "").replace("http://", "")
+        base_url = f"https://{clean_hostname}"
+        
+        # Set up headers for API call
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Try multiple API endpoints as per Databricks documentation
+        endpoints_to_try = [
+            '/api/2.0/preview/scim/v2/Users',  # SCIM API
+            '/api/2.0/users'  # Users API
+        ]
+        
+        users_data = []
+        api_success = False
+        
+        for endpoint in endpoints_to_try:
             try:
-                logger.info("Attempting to fetch users via workspace_client.users.list()")
-                users = list(workspace_client.users.list())
-                logger.info(f"Successfully fetched {len(users)} users via SDK users.list()")
+                url = f"{base_url}{endpoint}"
+                logger.info(f"Attempting to fetch users from: {url}")
                 
-                for user in users:
-                    if user.active:
-                        email = user.emails[0].value if user.emails else ""
-                        users_data.append({
-                            'ID': user.id,
-                            'Display Name': user.display_name or "",
-                            'Email': email,
-                            'Username': user.user_name or "",
-                            'Status': '✅ Active' if user.active else '❌ Inactive'
-                        })
-                logger.info(f"Processed {len(users_data)} active users")
+                response = requests.get(url, headers=headers, timeout=30)
+                logger.info(f"API Response Status: {response.status_code}")
                 
-            except Exception as users_api_error:
-                logger.warning(f"Users API failed: {users_api_error}")
-                
-                # Fallback: Try using the account users API
-                try:
-                    logger.info("Attempting to fetch users via workspace_client.account_users.list()")
-                    account_users = list(workspace_client.account_users.list())
-                    logger.info(f"Successfully fetched {len(account_users)} users via SDK account_users.list()")
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"API Response received: {len(str(data))} characters")
                     
-                    for user in account_users:
-                        if user.active:
-                            email = user.emails[0].value if user.emails else ""
-                            users_data.append({
-                                'ID': user.id,
-                                'Display Name': user.display_name or "",
-                                'Email': email,
-                                'Username': user.user_name or "",
-                                'Status': '✅ Active' if user.active else '❌ Inactive'
-                            })
-                    logger.info(f"Processed {len(users_data)} active users from account API")
+                    # Handle SCIM API response format
+                    if 'Resources' in data:
+                        users = data['Resources']
+                        logger.info(f"Found {len(users)} users in SCIM API response")
+                        
+                        for user in users:
+                            if user.get('active', False):
+                                # Extract email from SCIM format
+                                email = ""
+                                if 'emails' in user and user['emails']:
+                                    email = user['emails'][0].get('value', '')
+                                
+                                users_data.append({
+                                    'ID': user.get('id', ''),
+                                    'Display Name': user.get('displayName', ''),
+                                    'Email': email,
+                                    'Username': user.get('userName', ''),
+                                    'Status': '✅ Active'
+                                })
                     
-                except Exception as account_users_error:
-                    logger.warning(f"Account users API failed: {account_users_error}")
-                    raise Exception("Both users APIs failed")
+                    # Handle Users API response format
+                    elif isinstance(data, list):
+                        users = data
+                        logger.info(f"Found {len(users)} users in Users API response")
+                        
+                        for user in users:
+                            if user.get('active', False):
+                                users_data.append({
+                                    'ID': user.get('id', ''),
+                                    'Display Name': user.get('display_name', ''),
+                                    'Email': user.get('email', ''),
+                                    'Username': user.get('user_name', ''),
+                                    'Status': '✅ Active'
+                                })
                     
-            # If we didn't get any users, show a warning
-            if not users_data:
-                logger.warning("No active users found in workspace")
-                raise Exception("No active users found")
-                
-        except Exception as e:
-            logger.warning(f"Failed to fetch users via SDK: {e}")
-            logger.info("Falling back to demo data...")
-            
-            # If SDK fails, use demo data with a warning
+                    # Handle other response formats
+                    elif 'users' in data:
+                        users = data['users']
+                        logger.info(f"Found {len(users)} users in nested users response")
+                        
+                        for user in users:
+                            if user.get('active', False):
+                                users_data.append({
+                                    'ID': user.get('id', ''),
+                                    'Display Name': user.get('display_name', user.get('displayName', '')),
+                                    'Email': user.get('email', ''),
+                                    'Username': user.get('user_name', user.get('userName', '')),
+                                    'Status': '✅ Active'
+                                })
+                    
+                    if users_data:
+                        api_success = True
+                        logger.info(f"Successfully extracted {len(users_data)} active users from {endpoint}")
+                        break
+                    else:
+                        logger.warning(f"No active users found in response from {endpoint}")
+                        
+                else:
+                    logger.warning(f"API call failed with status {response.status_code}: {response.text}")
+                    
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Request failed for {endpoint}: {str(e)}")
+                continue
+            except Exception as e:
+                logger.warning(f"Error processing response from {endpoint}: {str(e)}")
+                continue
+        
+        # If no API worked, fall back to demo data
+        if not api_success or not users_data:
+            logger.info("All API calls failed, falling back to demo data")
             users_data = [
                 {
                     'ID': 'demo-user-1',
@@ -427,9 +452,9 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 },
                 {
                     'ID': 'demo-user-4',
-                    'Display Name': 'Alice Brown',
-                    'Email': 'alice.brown@company.com',
-                    'Username': 'alice.brown@company.com',
+                    'Display Name': 'Digital Workshop Admin',
+                    'Email': 'admin@company.com',
+                    'Username': 'admin@company.com',
                     'Status': '⚠️ Demo Data'
                 },
                 {
@@ -440,22 +465,21 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                     'Status': '⚠️ Demo Data'
                 }
             ]
-            logger.info(f"Using demo data with {len(users_data)} users")
-        
+
         # Create the users table
         users_table = dbc.Table([
             html.Thead([
                 html.Tr([
-                    html.Th("ID"),
-                    html.Th("Display Name"),
-                    html.Th("Email"),
-                    html.Th("Username"),
-                    html.Th("Status")
+                    html.Th("👤 User ID"),
+                    html.Th("📝 Display Name"),
+                    html.Th("📧 Email Address"),
+                    html.Th("🔑 Username"),
+                    html.Th("🔄 Status")
                 ])
             ]),
             html.Tbody([
                 html.Tr([
-                    html.Td(user['ID']),
+                    html.Td(user['ID'][:12] + "..." if len(user['ID']) > 15 else user['ID']),  # Truncate long IDs
                     html.Td(user['Display Name']),
                     html.Td(user['Email']),
                     html.Td(user['Username']),
@@ -463,7 +487,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 ]) for user in users_data
             ])
         ], bordered=True, hover=True, striped=True, className="mt-3")
-        
+
         # Check if we're showing demo data
         is_demo_data = any(user.get('Status', '').startswith('⚠️') for user in users_data)
         
@@ -471,21 +495,21 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
             success_message = dbc.Alert([
                 html.H6("⚠️ Demo Data Displayed", className="alert-heading"),
                 html.P(f"Unable to fetch real users from workspace. Showing {len(users_data)} demo users instead."),
-                html.P("This may be due to permissions or API restrictions in the deployed environment."),
-                html.P("In a real workshop setup, this would show actual workspace users.")
+                html.P("This may be due to API permissions or network restrictions in the deployed environment."),
+                html.P("In a real workshop setup, this would show actual workspace users with their email addresses.")
             ], color="warning")
         else:
             success_message = dbc.Alert([
                 html.H6("✅ Users Fetched Successfully!", className="alert-heading"),
-                html.P(f"Retrieved {len(users_data)} active users from workspace"),
-                html.P("These users are eligible to participate in the workshop")
+                html.P(f"Retrieved {len(users_data)} active users from workspace using Databricks REST API"),
+                html.P("These users are eligible to participate in the workshop. Their email addresses are ready for notifications.")
             ], color="success")
         
-        logger.info(f"Returning users table and success message. Table has {len(users_data)} users.")
+        logger.info(f"Returning users table with {len(users_data)} users and success message")
         return users_table, success_message
 
     except Exception as e:
-        error_msg = f"❌ Error fetching users: {str(e)}"
+        error_msg = f"❌ Unexpected error fetching users: {str(e)}"
         logger.error(error_msg)
         logger.error(f"Exception type: {type(e)}")
         import traceback
