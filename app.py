@@ -336,16 +336,6 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
     # Test return to verify callback is working
     logger.info("✅ Validation passed, proceeding with user fetch")
     
-    # SIMPLE TEST: Return basic content to verify callback updates UI
-    # simple_test_table = html.Div([
-    #     html.H4("🧪 SIMPLE TEST: Callback is working!"),
-    #     html.P("If you see this, the callback mechanism is functioning correctly."),
-    #     html.P("The issue is likely with the complex table structure."),
-    # ])
-    # simple_success = dbc.Alert("✅ Simple test successful!", color="success")
-    # logger.info("Returning simple test content")
-    # return simple_test_table, simple_success
-    
     logger.info(f"Fetching users from Databricks workspace: {hostname}")
     
     try:
@@ -546,14 +536,20 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
         
         logger.info("🔄 Executing callback return...")
         
-        # TEMPORARY: Simple test to verify callback works
-        # test_table = html.Div([
-        #     html.H4("🧪 TEST: Callback Working!"),
-        #     html.P(f"Found {len(users_data)} users successfully!")
-        # ])
-        # return test_table, success_message
+        # SIMPLE TEST: Return basic content to verify callback updates UI
+        simple_test_table = html.Div([
+            html.H4("🧪 SIMPLE TEST: Callback is working!"),
+            html.P("If you see this, the callback mechanism is functioning correctly."),
+            html.P("The issue is likely with the complex table structure."),
+            html.P(f"✅ Found {len(users_data)} users in workspace"),
+            html.P(f"📊 Table created successfully with {len(display_users)} participants")
+        ])
+        simple_success = dbc.Alert("✅ Simple test successful! User processing works correctly.", color="success")
+        logger.info("Returning simple test content instead of complex table")
+        return simple_test_table, simple_success
         
-        return users_table, success_message
+        # Complex table disabled for testing
+        # return users_table, success_message
 
     except Exception as e:
         error_msg = f"❌ Error fetching users with Databricks SDK: {str(e)}"
