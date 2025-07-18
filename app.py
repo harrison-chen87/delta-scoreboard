@@ -73,19 +73,16 @@ def create_warehouse_creation_form():
             dbc.FormText("Warehouse will stop automatically after this period of inactivity", className="mb-3"),
             
             dbc.Label("Number of Warehouses", html_for="warehouse-count"),
-            dbc.Select(
+            dbc.Input(
                 id="warehouse-count",
-                options=[
-                    {"label": "1 Warehouse", "value": 1},
-                    {"label": "2 Warehouses", "value": 2},
-                    {"label": "3 Warehouses", "value": 3},
-                    {"label": "4 Warehouses", "value": 4},
-                    {"label": "5 Warehouses", "value": 5}
-                ],
+                type="number",
                 value=1,
+                min=1,
+                max=5,
+                step=1,
                 className="mb-3"
             ),
-            dbc.FormText("Create multiple warehouses of the same size for load distribution", className="mb-3"),
+            dbc.FormText("Create 1-5 warehouses of the same size for load distribution", className="mb-3"),
             
             dbc.Button("Create Serverless Warehouse(s)", id="create-warehouse-btn", color="success", className="w-100 mb-3"),
             html.Div(id="warehouse-creation-message", className="text-center")
@@ -217,6 +214,20 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
         return dbc.Alert("❌ Please fill in all required fields", color="danger")
     
     try:
+        # Convert warehouse_count to integer and validate
+        try:
+            warehouse_count = int(warehouse_count) if warehouse_count else 1
+            if warehouse_count < 1 or warehouse_count > 5:
+                return dbc.Alert("❌ Number of warehouses must be between 1 and 5", color="danger")
+        except (ValueError, TypeError):
+            return dbc.Alert("❌ Please enter a valid number for warehouse count", color="danger")
+        
+        # Convert auto_stop to integer
+        try:
+            auto_stop = int(auto_stop) if auto_stop else 240
+        except (ValueError, TypeError):
+            return dbc.Alert("❌ Invalid auto-stop value", color="danger")
+        
         # Initialize the SQL warehouse manager
         warehouse_manager = SQLWarehouseManager(hostname, access_token)
         
@@ -297,29 +308,47 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
 )
 def fetch_users_from_scim(n_clicks, hostname, access_token):
     """Fetch users from SCIM API and display in table."""
+    logger.info(f"Fetch users callback triggered: n_clicks={n_clicks}, hostname={hostname is not None}, access_token={access_token is not None}")
+    
     if not n_clicks:
         return "", ""
     
     # Validate inputs
     if not all([hostname, access_token]):
-        return "", dbc.Alert("❌ Please fill in hostname and access token", color="danger")
+        error_msg = "❌ Please fill in hostname and access token"
+        logger.warning(error_msg)
+        return "", dbc.Alert(error_msg, color="danger")
+    
+    logger.info(f"Fetching users from SCIM API for hostname: {hostname}")
+    
+    # Return loading message immediately
+    loading_message = dbc.Alert([
+        dbc.Spinner(size="sm", className="me-2"),
+        "Fetching users from SCIM API..."
+    ], color="info")
     
     try:
         # Use Databricks SDK to fetch users via SCIM API
         try:
+            logger.info("Starting user fetch process...")
+            
             # Clean hostname to avoid double https:// prefix
             clean_hostname = hostname.replace("https://", "").replace("http://", "")
+            logger.info(f"Cleaned hostname: {clean_hostname}")
+            
             workspace_client = WorkspaceClient(
                 host=f"https://{clean_hostname}",
                 token=access_token,
                 auth_type="pat"  # Explicitly set to Personal Access Token authentication
             )
+            logger.info("WorkspaceClient initialized successfully")
             
             # Try multiple approaches to fetch users
             users_data = []
             
             # First, try using the users API
             try:
+                logger.info("Attempting to fetch users via workspace_client.users.list()")
                 users = list(workspace_client.users.list())
                 logger.info(f"Successfully fetched {len(users)} users via SDK users.list()")
                 
@@ -333,11 +362,14 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                             'Username': user.user_name or "",
                             'Status': '✅ Active' if user.active else '❌ Inactive'
                         })
+                logger.info(f"Processed {len(users_data)} active users")
+                
             except Exception as users_api_error:
                 logger.warning(f"Users API failed: {users_api_error}")
                 
                 # Fallback: Try using the account users API
                 try:
+                    logger.info("Attempting to fetch users via workspace_client.account_users.list()")
                     account_users = list(workspace_client.account_users.list())
                     logger.info(f"Successfully fetched {len(account_users)} users via SDK account_users.list()")
                     
@@ -351,6 +383,8 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                                 'Username': user.user_name or "",
                                 'Status': '✅ Active' if user.active else '❌ Inactive'
                             })
+                    logger.info(f"Processed {len(users_data)} active users from account API")
+                    
                 except Exception as account_users_error:
                     logger.warning(f"Account users API failed: {account_users_error}")
                     raise Exception("Both users APIs failed")
@@ -362,6 +396,8 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 
         except Exception as e:
             logger.warning(f"Failed to fetch users via SDK: {e}")
+            logger.info("Falling back to demo data...")
+            
             # If SDK fails, use demo data with a warning
             users_data = [
                 {
@@ -400,6 +436,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                     'Status': '⚠️ Demo Data'
                 }
             ]
+            logger.info(f"Using demo data with {len(users_data)} users")
         
         # Create the users table
         users_table = dbc.Table([
@@ -440,10 +477,16 @@ def fetch_users_from_scim(n_clicks, hostname, access_token):
                 html.P("These users are eligible to participate in the workshop")
             ], color="success")
         
+        logger.info(f"Returning users table and success message. Table has {len(users_data)} users.")
         return users_table, success_message
-        
+
     except Exception as e:
-        return "", dbc.Alert(f"❌ Error fetching users: {str(e)}", color="danger")
+        error_msg = f"❌ Error fetching users: {str(e)}"
+        logger.error(error_msg)
+        logger.error(f"Exception type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return "", dbc.Alert(error_msg, color="danger")
 
 # Callback for refreshing warehouses
 @app.callback(
