@@ -118,6 +118,16 @@ def create_user_management_section():
             # Progress bar for leaderboard initialization
             html.Div(id="leaderboard-progress", className="mb-3"),
             
+            # Manual refresh button for querying warehouse
+            dbc.Button(
+                [html.I(className="bi bi-arrow-clockwise me-2"), "🔄 Manual Refresh from Warehouse"],
+                id="manual-refresh-btn",
+                color="outline-primary", 
+                size="sm",
+                className="mb-3",
+                style={"display": "none"}  # Initially hidden, shown after initialization
+            ),
+            
             # Default leaderboard structure - will be replaced by callback
             html.Div([
                 html.Div([
@@ -141,7 +151,7 @@ def create_user_management_section():
                     html.H6("🔧 For Workshop Facilitators:", className="text-primary"),
                     html.P([
                         "Update participant scores with SQL: ",
-                        html.Code("UPDATE <catalog>.workshop_leaderboard SET score = score + 10 WHERE email = 'participant@company.com'")
+                        html.Code("UPDATE <catalog>.<schema>.<table> SET score = score + 10 WHERE email = 'participant@company.com'")
                     ], className="small text-muted")
                 ], color="info", className="mb-3"),
                     
@@ -196,10 +206,26 @@ app.layout = html.Div([
                             value="main",
                             className="mb-3"
                         ),
+                        dbc.Label("Schema Name", html_for="schema-name"),
+                        dbc.Input(
+                            id="schema-name",
+                            type="text",
+                            placeholder="default",
+                            value="default",
+                            className="mb-3"
+                        ),
+                        dbc.Label("Table Name", html_for="table-name"),
+                        dbc.Input(
+                            id="table-name",
+                            type="text",
+                            placeholder="workshop_leaderboard",
+                            value="workshop_leaderboard",
+                            className="mb-3"
+                        ),
                         dbc.FormText([
                             "Need Admin permissions to create warehouses and fetch users", 
                             html.Br(),
-                            "Catalog will be created if it doesn't exist (defaults to 'main')"
+                            "Unity Catalog naming: catalog.schema.table_name (all will be created if they don't exist)"
                         ], className="text-warning")
                     ])
                 ])
@@ -374,21 +400,24 @@ def show_progress_bar(n_clicks):
 @app.callback(
     [Output("users-table-container", "children"),
      Output("fetch-users-message", "children"),
-     Output("leaderboard-progress", "children", allow_duplicate=True)],
+     Output("leaderboard-progress", "children", allow_duplicate=True),
+     Output("manual-refresh-btn", "style", allow_duplicate=True)],
     Input("fetch-users-btn", "n_clicks"),
     [State("hostname", "value"),
      State("access-token", "value"),
-     State("catalog-name", "value")],
+     State("catalog-name", "value"),
+     State("schema-name", "value"),
+     State("table-name", "value")],
     prevent_initial_call=True
 )
-def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
+def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name, schema_name, table_name):
     """Fetch users from Databricks workspace using the official SDK users.list() method."""
     logger.info(f"=== FETCH USERS CALLBACK START ===")
     logger.info(f"n_clicks={n_clicks}, hostname_provided={hostname is not None}, token_provided={access_token is not None}")
     
     if not n_clicks:
         logger.info("No clicks detected, returning empty values")
-        return "", "", ""
+        return "", "", "", {"display": "none"}
     
     # Show loading state immediately
     loading_message = dbc.Alert([
@@ -402,11 +431,14 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
         error_msg = "❌ Please fill in hostname and access token"
         logger.warning(error_msg)
         logger.info(f"Returning validation error: {error_msg}")
-        return "", dbc.Alert(error_msg, color="danger"), ""
+        return "", dbc.Alert(error_msg, color="danger"), "", {"display": "none"}
     
-    # Default catalog name if not provided
+    # Default naming if not provided
     catalog_name = catalog_name or "main"
-    logger.info(f"Using catalog: {catalog_name}")
+    schema_name = schema_name or "default"
+    table_name = table_name or "workshop_leaderboard"
+    full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
+    logger.info(f"Using table: {full_table_name}")
     
     # Test return to verify callback is working
     logger.info("✅ Validation passed, proceeding with user fetch")
@@ -635,7 +667,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
         
         # Create dedicated serverless warehouse for leaderboard  
         logger.info("🏗️ Step 2/4: Creating dedicated serverless warehouse...")
-        warehouse_result = create_leaderboard_warehouse(hostname, access_token, catalog_name)
+        warehouse_result = create_leaderboard_warehouse(hostname, access_token, catalog_name, schema_name)
         
         if warehouse_result['success']:
             logger.info("✅ Step 2/4 complete: Warehouse created successfully")
@@ -646,14 +678,16 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
                 hostname, 
                 access_token, 
                 warehouse_result['warehouse_id'],
-                catalog_name
+                catalog_name,
+                schema_name,
+                table_name
             )
             
             if storage_result['success']:
                 logger.info("✅ Step 3/4 complete: Data stored successfully in warehouse")
                 # Query the warehouse to populate the UI
                 logger.info("🎯 Step 4/4: Creating real-time leaderboard UI...")
-                leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, warehouse_result['warehouse_id'], catalog_name)
+                leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, warehouse_result['warehouse_id'], catalog_name, schema_name, table_name)
                 logger.info("✅ Step 4/4 complete: Leaderboard UI created successfully")
                 success_message = dbc.Alert([
                     html.H6("🏆 Leaderboard Database Initialized Successfully!", className="alert-heading"),
@@ -680,7 +714,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
                     ], className="text-muted")
                 ])
                 
-                return leaderboard_ui, success_message, completion_progress
+                return leaderboard_ui, success_message, completion_progress, {"display": "block"}
             else:
                 # Warehouse created but storage failed
                 error_message = dbc.Alert([
@@ -706,7 +740,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
                     ], className="text-muted")
                 ])
                 
-                return fallback_table, error_message, error_progress
+                return fallback_table, error_message, error_progress, {"display": "none"}
         else:
             # Warehouse creation failed
             error_message = dbc.Alert([
@@ -732,7 +766,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
                 ], className="text-muted")
             ])
             
-            return fallback_table, error_message, error_progress
+            return fallback_table, error_message, error_progress, {"display": "none"}
 
     except Exception as e:
         error_msg = f"❌ Error fetching users with Databricks SDK: {str(e)}"
@@ -824,7 +858,55 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
             ], className="text-muted")
         ])
         
-        return users_table, error_alert, error_progress
+        return users_table, error_alert, error_progress, {"display": "none"}
+
+
+# Callback for manual refresh button
+@app.callback(
+    [Output("users-table-container", "children", allow_duplicate=True),
+     Output("manual-refresh-btn", "style", allow_duplicate=True)],
+    Input("manual-refresh-btn", "n_clicks"),
+    [State("hostname", "value"),
+     State("access-token", "value"),
+     State("catalog-name", "value"),
+     State("schema-name", "value"),
+     State("table-name", "value")],
+    prevent_initial_call=True
+)
+def manual_refresh_leaderboard(n_clicks, hostname, access_token, catalog_name, schema_name, table_name):
+    """Manual refresh of the leaderboard from warehouse."""
+    if not n_clicks:
+        return "", {"display": "none"}
+    
+    try:
+        logger.info(f"Manual refresh triggered by user")
+        
+        # Check if we have credentials
+        if not all([hostname, access_token]):
+            return html.Div([
+                dbc.Alert("⚠️ Please enter workspace credentials first", color="warning", className="text-center")
+            ]), {"display": "block"}
+        
+        # Default naming if not provided
+        catalog_name = catalog_name or "main"
+        schema_name = schema_name or "default"
+        table_name = table_name or "workshop_leaderboard"
+        
+        # Try to refresh the leaderboard from warehouse
+        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name, schema_name, table_name)
+        logger.info("Manual leaderboard refresh successful")
+        return leaderboard_ui, {"display": "block"}
+        
+    except Exception as e:
+        logger.warning(f"Manual refresh failed: {str(e)}")
+        error_ui = html.Div([
+            dbc.Alert([
+                html.H6("❌ Refresh Failed", className="alert-heading"),
+                html.P(f"Error: {str(e)}"),
+                html.P("Make sure the leaderboard has been initialized and the warehouse is running.")
+            ], color="danger")
+        ])
+        return error_ui, {"display": "block"}
 
 
 # Callback for auto-refreshing the leaderboard
@@ -834,10 +916,12 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
      Input("refresh-leaderboard-btn", "n_clicks")],
     [State("hostname", "value"),
      State("access-token", "value"),
-     State("catalog-name", "value")],
+     State("catalog-name", "value"),
+     State("schema-name", "value"),
+     State("table-name", "value")],
     prevent_initial_call=True
 )
-def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token, catalog_name):
+def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token, catalog_name, schema_name, table_name):
     """Auto-refresh the leaderboard every 30 seconds or when refresh button is clicked."""
     try:
         logger.info(f"Auto-refreshing leaderboard: intervals={n_intervals}, clicks={refresh_clicks}")
@@ -849,11 +933,13 @@ def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token
                        className="text-muted text-center")
             ])
         
-        # Default catalog name if not provided
+        # Default naming if not provided
         catalog_name = catalog_name or "main"
+        schema_name = schema_name or "default"
+        table_name = table_name or "workshop_leaderboard"
         
         # Try to refresh the leaderboard from warehouse
-        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name)
+        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name, schema_name, table_name)
         logger.info("Leaderboard auto-refresh successful")
         return leaderboard_ui
         
@@ -954,7 +1040,7 @@ def stop_and_delete_all_warehouses(n_clicks, hostname, access_token):
         return dbc.Alert(f"❌ Error managing warehouses: {str(e)}", color="danger")
 
 
-def create_leaderboard_warehouse(hostname, access_token, catalog_name):
+def create_leaderboard_warehouse(hostname, access_token, catalog_name, schema_name):
     """Create a dedicated serverless XL warehouse for the leaderboard."""
     try:
         logger.info("Creating dedicated serverless warehouse for leaderboard")
@@ -980,7 +1066,7 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
             for var, value in original_env.items():
                 os.environ[var] = value
         
-        # Create catalog if it doesn't exist
+        # Create catalog and schema if they don't exist
         try:
             logger.info(f"Ensuring catalog '{catalog_name}' exists")
             # First check if catalog exists
@@ -994,6 +1080,20 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
                 logger.info(f"Successfully created catalog '{catalog_name}'")
         except Exception as e:
             logger.warning(f"Could not create catalog '{catalog_name}': {str(e)}. Proceeding with existing catalog.")
+        
+        # Create schema if it doesn't exist
+        try:
+            logger.info(f"Ensuring schema '{catalog_name}.{schema_name}' exists")
+            try:
+                schema_info = workspace_client.schemas.get(f"{catalog_name}.{schema_name}")
+                logger.info(f"Schema '{catalog_name}.{schema_name}' already exists")
+            except Exception:
+                # Schema doesn't exist, create it
+                logger.info(f"Creating schema '{catalog_name}.{schema_name}'")
+                workspace_client.schemas.create(name=schema_name, catalog_name=catalog_name)
+                logger.info(f"Successfully created schema '{catalog_name}.{schema_name}'")
+        except Exception as e:
+            logger.warning(f"Could not create schema '{catalog_name}.{schema_name}': {str(e)}. Proceeding with existing schema.")
         
         # Import required classes for warehouse creation
         from databricks.sdk.service.sql import EndpointInfoWarehouseType
@@ -1050,7 +1150,7 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
         }
 
 
-def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None, catalog_name="main"):
+def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None, catalog_name="main", schema_name="default", table_name="workshop_leaderboard"):
     """Store the leaderboard DataFrame in the specified SQL warehouse."""
     try:
         logger.info(f"Storing leaderboard DataFrame with {len(df)} participants in warehouse")
@@ -1109,10 +1209,8 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
                     'error': 'No SQL warehouse available. Please create a warehouse first.'
                 }
         
-        # Create the database table name
-        table_name = "workshop_leaderboard"
-        database_name = catalog_name
-        full_table_name = f"{database_name}.{table_name}"
+        # Create the full Unity Catalog table name
+        full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
         
         # Create the SQL table
         create_table_sql = f"""
@@ -1195,7 +1293,7 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
         }
 
 
-def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, catalog_name="main"):
+def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, catalog_name="main", schema_name="default", table_name="workshop_leaderboard"):
     """Query the leaderboard from the SQL warehouse and return UI components."""
     try:
         logger.info("Querying leaderboard from warehouse")
@@ -1239,9 +1337,10 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
                 raise Exception("No running warehouse found")
         
         # Query the leaderboard (top 50 for UI performance)
+        full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
         query_sql = f"""
         SELECT rank, display_name, email, status, score, last_updated
-        FROM {catalog_name}.workshop_leaderboard
+        FROM {full_table_name}
         ORDER BY rank
         LIMIT 50
         """
