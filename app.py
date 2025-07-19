@@ -355,13 +355,18 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
 def show_progress_bar(n_clicks):
     """Show progress bar immediately when initialize button is clicked."""
     if n_clicks:
-        return dbc.Progress(
-            value=10, 
-            color="info", 
-            label="🚀 Starting initialization...",
-            className="mb-2",
-            style={"height": "30px"}
-        )
+        return html.Div([
+            dbc.Progress(
+                value=10, 
+                color="info", 
+                label="🚀 Starting leaderboard initialization...",
+                className="mb-2",
+                style={"height": "30px"}
+            ),
+            html.Small([
+                "🔄 Process starting: Data Processing → Warehouse Creation → Data Storage → UI Generation"
+            ], className="text-muted")
+        ])
     return ""
 
 
@@ -607,6 +612,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
         logger.info("🔄 Executing callback return...")
         
         # Convert users to DataFrame for database storage
+        logger.info("📊 Step 1/4: Converting users to DataFrame for database storage...")
         logger.info(f"Converting {len(users_data)} users to DataFrame")
         
         # Create DataFrame with leaderboard structure
@@ -625,13 +631,16 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
             })
         
         participants_df = pd.DataFrame(df_data)
-        logger.info(f"Created DataFrame with {len(participants_df)} participants")
+        logger.info(f"✅ Step 1/4 complete: Created DataFrame with {len(participants_df)} participants")
         
-        # Create dedicated serverless warehouse for leaderboard
+        # Create dedicated serverless warehouse for leaderboard  
+        logger.info("🏗️ Step 2/4: Creating dedicated serverless warehouse...")
         warehouse_result = create_leaderboard_warehouse(hostname, access_token, catalog_name)
         
         if warehouse_result['success']:
+            logger.info("✅ Step 2/4 complete: Warehouse created successfully")
             # Store DataFrame in the newly created warehouse
+            logger.info("💾 Step 3/4: Storing participant data in SQL warehouse...")
             storage_result = store_leaderboard_in_warehouse(
                 participants_df, 
                 hostname, 
@@ -641,8 +650,11 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
             )
             
             if storage_result['success']:
+                logger.info("✅ Step 3/4 complete: Data stored successfully in warehouse")
                 # Query the warehouse to populate the UI
+                logger.info("🎯 Step 4/4: Creating real-time leaderboard UI...")
                 leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, warehouse_result['warehouse_id'], catalog_name)
+                logger.info("✅ Step 4/4 complete: Leaderboard UI created successfully")
                 success_message = dbc.Alert([
                     html.H6("🏆 Leaderboard Database Initialized Successfully!", className="alert-heading"),
                     html.P(f"✅ Created dedicated serverless warehouse: {warehouse_result['warehouse_name']}"),
@@ -654,14 +666,19 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
                 
                 logger.info(f"Successfully created warehouse and stored leaderboard")
                 
-                # Show completion progress
-                completion_progress = dbc.Progress(
-                    value=100, 
-                    color="success", 
-                    label="✅ Leaderboard initialization complete!",
-                    className="mb-2",
-                    style={"height": "30px"}
-                )
+                # Show completion progress with detailed stages
+                completion_progress = html.Div([
+                    dbc.Progress(
+                        value=100, 
+                        color="success", 
+                        label="✅ All 4 steps completed successfully!",
+                        className="mb-2",
+                        style={"height": "30px"}
+                    ),
+                    html.Small([
+                        "🎯 Process completed: Data Processing → Warehouse Creation → Data Storage → UI Generation"
+                    ], className="text-muted")
+                ])
                 
                 return leaderboard_ui, success_message, completion_progress
             else:
@@ -676,13 +693,18 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
                 fallback_table = create_simple_leaderboard_table(users_data[:20])
                 
                 # Show error progress
-                error_progress = dbc.Progress(
-                    value=70, 
-                    color="warning", 
-                    label="⚠️ Partial completion - warehouse created",
-                    className="mb-2",
-                    style={"height": "30px"}
-                )
+                error_progress = html.Div([
+                    dbc.Progress(
+                        value=70, 
+                        color="warning", 
+                        label="⚠️ Partial completion - warehouse created",
+                        className="mb-2",
+                        style={"height": "30px"}
+                    ),
+                    html.Small([
+                        "✅ Steps completed: Data Processing → Warehouse Creation | ❌ Data Storage failed"
+                    ], className="text-muted")
+                ])
                 
                 return fallback_table, error_message, error_progress
         else:
@@ -697,13 +719,18 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
             fallback_table = create_simple_leaderboard_table(users_data[:20])
             
             # Show error progress
-            error_progress = dbc.Progress(
-                value=30, 
-                color="danger", 
-                label="❌ Warehouse creation failed",
-                className="mb-2",
-                style={"height": "30px"}
-            )
+            error_progress = html.Div([
+                dbc.Progress(
+                    value=30, 
+                    color="danger", 
+                    label="❌ Warehouse creation failed",
+                    className="mb-2",
+                    style={"height": "30px"}
+                ),
+                html.Small([
+                    "✅ Steps completed: Data Processing | ❌ Warehouse Creation failed"
+                ], className="text-muted")
+            ])
             
             return fallback_table, error_message, error_progress
 
@@ -784,13 +811,18 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
         ], color="warning")
         
         # Show error progress
-        error_progress = dbc.Progress(
-            value=20, 
-            color="danger", 
-            label="❌ SDK error - showing demo data",
-            className="mb-2",
-            style={"height": "30px"}
-        )
+        error_progress = html.Div([
+            dbc.Progress(
+                value=20, 
+                color="danger", 
+                label="❌ SDK error - showing demo data",
+                className="mb-2",
+                style={"height": "30px"}
+            ),
+            html.Small([
+                "❌ Process failed early: Authentication or connection issues"
+            ], className="text-muted")
+        ])
         
         return users_table, error_alert, error_progress
 
@@ -964,15 +996,17 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
             logger.warning(f"Could not create catalog '{catalog_name}': {str(e)}. Proceeding with existing catalog.")
         
         # Import required classes for warehouse creation
-        from databricks.sdk.service.sql import CreateWarehouseRequest, EndpointInfoWarehouseType
+        from databricks.sdk.service.sql import EndpointInfoWarehouseType
         
         # Generate unique warehouse name
         import time
         timestamp = int(time.time())
         warehouse_name = f"workshop-leaderboard-{timestamp}"
         
-        # Create warehouse request with serverless XL configuration
-        warehouse_request = CreateWarehouseRequest(
+        logger.info(f"Creating warehouse: {warehouse_name} (XL, serverless, 8h autostop)")
+        
+        # Create the warehouse using keyword arguments (not request object)
+        warehouse = workspace_client.warehouses.create(
             name=warehouse_name,
             cluster_size="X-Large",  # XL size as requested
             warehouse_type=EndpointInfoWarehouseType.PRO,  # PRO type supports serverless
@@ -982,11 +1016,6 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
             enable_photon=True,  # Enable Photon for better performance
             enable_serverless_compute=True  # This enables serverless for PRO type
         )
-        
-        logger.info(f"Creating warehouse: {warehouse_name} (XL, serverless, 8h autostop)")
-        
-        # Create the warehouse
-        warehouse = workspace_client.warehouses.create(warehouse_request)
         warehouse_id = warehouse.id
         
         # Start the warehouse
