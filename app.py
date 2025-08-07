@@ -2,6 +2,7 @@
 
 import dash
 from dash import html, dcc, Input, Output, State, callback, dash_table
+import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 import json
 import os
@@ -1104,12 +1105,11 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
             if not running_warehouse:
                 raise Exception("No running warehouse found")
         
-        # Query the leaderboard (top 50 for UI performance)
+        # Query all leaderboard rows; AG Grid will handle virtualization efficiently
         query_sql = f"""
         SELECT rank, display_name, email, status, score, last_updated
         FROM {catalog_name}.workshop_leaderboard
-        ORDER BY rank
-        LIMIT 50
+        ORDER BY score DESC, rank ASC
         """
         
         result = workspace_client.statement_execution.execute_statement(
@@ -1130,66 +1130,62 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
                     'last_updated': row[5]
                 })
         
-        # Create the leaderboard UI
-        table_rows = []
-        for participant in leaderboard_data:
-            table_rows.append(html.Tr([
-                html.Td(f"#{participant['rank']}", style={"font-weight": "bold"}),
-                html.Td(participant['display_name']),
-                html.Td(participant['email'], style={"color": "#6c757d"}),
-                html.Td("✅ Active" if participant['status'] == 'Active' else "❌ Inactive"),
-                html.Td(f"{participant['score']} pts", style={"font-weight": "bold", "color": "#198754"})
-            ]))
-        
+        # Build AG Grid configuration
+        column_defs = [
+            {"headerName": "Rank", "field": "rank", "width": 110},
+            {"headerName": "Name", "field": "display_name", "flex": 1},
+            {"headerName": "Email", "field": "email", "flex": 1},
+            {"headerName": "Status", "field": "status", "width": 140},
+            {"headerName": "Score", "field": "score", "width": 120},
+            {"headerName": "Updated", "field": "last_updated", "width": 200}
+        ]
+
+        ag_grid = dag.AgGrid(
+            id="leaderboard-ag-grid",
+            rowData=leaderboard_data,
+            columnDefs=column_defs,
+            defaultColDef={"resizable": True, "sortable": True, "filter": False},
+            rowModelType='clientSide',
+            className='ag-theme-alpine',
+            dashGridOptions={
+                "pagination": True,
+                "paginationPageSize": 100,
+                "headerHeight": 48,
+                "rowHeight": 44,
+                "animateRows": True,
+                "getRowStyle": {
+                    "function": """
+                    function(params) {
+                        if (params.node.rowIndex < 3) { return {background: '#fff3cd'}; }
+                        return {};
+                    }
+                    """
+                }
+            },
+            dangerously_allow_code=True,
+            style={"height": "650px", "width": "100%"}
+        )
+
         leaderboard_ui = html.Div([
-            # Header with real-time status
             html.Div([
                 html.H6([
-                    html.I(className="bi bi-trophy-fill me-2", style={"color": "#ffc107"}),
-                    f"Workshop Leaderboard - Live from SQL Warehouse"
+                    html.I(className="bi bI-trophy-fill me-2", style={"color": "#ffc107"}),
+                    "Workshop Leaderboard - Live from SQL Warehouse"
                 ], className="mb-2"),
                 html.Div([
                     html.Span("🔴 Live", className="badge bg-danger me-2"),
-                    html.Span(f"Updated: {pd.Timestamp.now().strftime('%H:%M:%S')}", 
-                             className="text-muted small"),
-                    dbc.Button("🔄 Refresh Now", id="refresh-leaderboard-btn", 
-                              color="outline-success", size="sm", className="ms-2")
+                    html.Span(f"Updated: {pd.Timestamp.now().strftime('%H:%M:%S')}", className="text-muted small"),
+                    dbc.Button("🔄 Refresh Now", id="refresh-leaderboard-btn", color="outline-success", size="sm", className="ms-2")
                 ], className="d-flex align-items-center mb-3")
             ]),
-            
-            # Leaderboard table
-            html.Div([
-                dbc.Table([
-                    html.Thead([
-                        html.Tr([
-                            html.Th("🏆 Rank", style={"width": "10%"}),
-                            html.Th("👤 Name", style={"width": "25%"}),
-                            html.Th("📧 Email", style={"width": "30%"}),
-                            html.Th("📊 Status", style={"width": "15%"}),
-                            html.Th("🎯 Score", style={"width": "20%"})
-                        ], style={"background-color": "#f8f9fa"})
-                    ]),
-                    html.Tbody(table_rows, id="leaderboard-tbody")
-                ], bordered=True, striped=True, hover=True, responsive=True)
-            ], style={"max-height": "600px", "overflow-y": "auto"}),
-            
-            # Footer info
+            ag_grid,
             html.Div([
                 html.P([
-                    html.Span(f"📊 Showing top {len(leaderboard_data)} participants from SQL warehouse", 
-                             className="text-muted small"),
+                    html.Span(f"📊 Loaded {len(leaderboard_data)} participants from SQL warehouse", className="text-muted small"),
                     html.Br(),
-                    html.Span("⚡ Real-time updates: Scores refresh automatically when updated in database", 
-                             className="text-info small")
+                    html.Span("⚡ AG Grid provides client-side sorting and pagination for fast interaction", className="text-info small")
                 ], className="mt-2 mb-2"),
-                
-                # Auto-refresh interval (every 30 seconds)
-                dcc.Interval(
-                    id='leaderboard-refresh-interval',
-                    interval=30*1000,  # 30 seconds in milliseconds
-                    n_intervals=0,
-                    disabled=False
-                )
+                dcc.Interval(id='leaderboard-refresh-interval', interval=30*1000, n_intervals=0, disabled=False)
             ])
         ], id="live-leaderboard-container")
         
