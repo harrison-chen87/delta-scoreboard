@@ -18,6 +18,29 @@ created_warehouses = []
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Helper: build a PAT-auth WorkspaceClient and avoid OAuth/PAT conflicts
+def create_pat_workspace_client(hostname: str, access_token: str) -> WorkspaceClient:
+    oauth_env_vars = [
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+        "DATABRICKS_OAUTH_TOKEN",
+    ]
+    saved_env: dict[str, str] = {}
+    for var in oauth_env_vars:
+        if var in os.environ:
+            saved_env[var] = os.environ[var]
+            del os.environ[var]
+
+    clean_hostname = hostname.replace("https://", "").replace("http://", "")
+    normalized_host = f"https://{clean_hostname}"
+
+    try:
+        client = WorkspaceClient(host=normalized_host, token=access_token, auth_type="pat")
+        return client
+    finally:
+        for var, value in saved_env.items():
+            os.environ[var] = value
+
 # Initialize Dash app for Databricks deployment
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 server = app.server  # This is needed for Databricks Apps
@@ -385,16 +408,8 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
     logger.info(f"Fetching users from Databricks workspace: {hostname}")
     
     try:
-        # Clean hostname to avoid double https:// prefix
-        clean_hostname = hostname.replace("https://", "").replace("http://", "")
-        logger.info(f"Cleaned hostname: {clean_hostname}")
-        
-        # Initialize WorkspaceClient as per official SDK documentation
-        workspace_client = WorkspaceClient(
-            host=f"https://{clean_hostname}",
-            token=access_token,
-            auth_type="pat"
-        )
+        # Initialize WorkspaceClient with explicit PAT auth and normalized host
+        workspace_client = create_pat_workspace_client(hostname, access_token)
         logger.info("WorkspaceClient initialized successfully")
         
         # Use the official SDK users.list() method
@@ -864,8 +879,8 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
     try:
         logger.info("Creating dedicated serverless warehouse for leaderboard")
         
-        # Create Databricks WorkspaceClient
-        workspace_client = WorkspaceClient(host=hostname, token=access_token)
+        # Create Databricks WorkspaceClient using PAT auth and normalized host
+        workspace_client = create_pat_workspace_client(hostname, access_token)
         
         # Create catalog if it doesn't exist
         try:
@@ -945,8 +960,8 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
     try:
         logger.info(f"Storing leaderboard DataFrame with {len(df)} participants in warehouse")
         
-        # Create Databricks WorkspaceClient
-        workspace_client = WorkspaceClient(host=hostname, token=access_token)
+        # Create Databricks WorkspaceClient using PAT auth and normalized host
+        workspace_client = create_pat_workspace_client(hostname, access_token)
         
         # Use specified warehouse or find a running one
         if warehouse_id:
@@ -1072,8 +1087,8 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
     try:
         logger.info("Querying leaderboard from warehouse")
         
-        # Create Databricks WorkspaceClient
-        workspace_client = WorkspaceClient(host=hostname, token=access_token)
+        # Create Databricks WorkspaceClient using PAT auth and normalized host
+        workspace_client = create_pat_workspace_client(hostname, access_token)
         
         # Use specified warehouse or find a running one
         if warehouse_id:
