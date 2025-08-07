@@ -775,10 +775,12 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name, schema
      Input("refresh-leaderboard-btn", "n_clicks")],
     [State("hostname", "value"),
      State("access-token", "value"),
-     State("catalog-name", "value")],
+     State("catalog-name", "value"),
+     State("schema-name", "value"),
+     State("table-name", "value")],
     prevent_initial_call=True
 )
-def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token, catalog_name):
+def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token, catalog_name, schema_name, table_name):
     """Auto-refresh the leaderboard every 30 seconds or when refresh button is clicked."""
     try:
         logger.info(f"Auto-refreshing leaderboard: intervals={n_intervals}, clicks={refresh_clicks}")
@@ -790,11 +792,13 @@ def auto_refresh_leaderboard(n_intervals, refresh_clicks, hostname, access_token
                        className="text-muted text-center")
             ])
         
-        # Default catalog name if not provided
+        # Default UC names
         catalog_name = catalog_name or "main"
-        
+        schema_name = schema_name or "default"
+        table_name = table_name or "workshop_leaderboard"
+
         # Try to refresh the leaderboard from warehouse
-        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name)
+        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name, schema_name, table_name)
         logger.info("Leaderboard auto-refresh successful")
         return leaderboard_ui
         
@@ -973,7 +977,7 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
         }
 
 
-def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None, catalog_name="main"):
+def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None, catalog_name="main", schema_name="default", table_name="workshop_leaderboard"):
     """Store the leaderboard DataFrame in the specified SQL warehouse."""
     try:
         logger.info(f"Storing leaderboard DataFrame with {len(df)} participants in warehouse")
@@ -1014,10 +1018,18 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
                     'error': 'No SQL warehouse available. Please create a warehouse first.'
                 }
         
-        # Create the database table name
-        table_name = "workshop_leaderboard"
-        database_name = catalog_name
-        full_table_name = f"{database_name}.{table_name}"
+        # Ensure catalog and schema exist (idempotent)
+        try:
+            workspace_client.catalogs.get(catalog_name)
+        except Exception:
+            workspace_client.catalogs.create(name=catalog_name)
+        try:
+            workspace_client.schemas.get(f"{catalog_name}.{schema_name}")
+        except Exception:
+            workspace_client.schemas.create(name=schema_name, catalog_name=catalog_name)
+
+        # Create the full UC table name
+        full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
         
         # Create the SQL table
         create_table_sql = f"""
@@ -1100,7 +1112,7 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
         }
 
 
-def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, catalog_name="main"):
+def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, catalog_name="main", schema_name="default", table_name="workshop_leaderboard"):
     """Query the leaderboard from the SQL warehouse and return UI components."""
     try:
         logger.info("Querying leaderboard from warehouse")
@@ -1128,7 +1140,7 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
         # Query all leaderboard rows; AG Grid will handle virtualization efficiently
         query_sql = f"""
         SELECT rank, display_name, email, status, score, last_updated
-        FROM {catalog_name}.workshop_leaderboard
+        FROM {catalog_name}.{schema_name}.{table_name}
         ORDER BY score DESC, rank ASC
         """
         
