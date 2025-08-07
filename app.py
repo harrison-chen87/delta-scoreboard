@@ -162,7 +162,7 @@ def create_user_management_section():
                     html.H6("🔧 For Workshop Facilitators:", className="text-primary"),
                     html.P([
                         "Update participant scores with SQL: ",
-                        html.Code("UPDATE <catalog>.workshop_leaderboard SET score = score + 10 WHERE email = 'participant@company.com'")
+                        html.Code("UPDATE <catalog>.<schema>.<table> SET score = score + 10 WHERE email = 'participant@company.com'")
                     ], className="small text-muted")
                 ], color="info", className="mb-3"),
                     
@@ -217,10 +217,26 @@ app.layout = html.Div([
                             value="main",
                             className="mb-3"
                         ),
+                        dbc.Label("Schema Name", html_for="schema-name"),
+                        dbc.Input(
+                            id="schema-name",
+                            type="text",
+                            placeholder="default",
+                            value="default",
+                            className="mb-3"
+                        ),
+                        dbc.Label("Table Name", html_for="table-name"),
+                        dbc.Input(
+                            id="table-name",
+                            type="text",
+                            placeholder="workshop_leaderboard",
+                            value="workshop_leaderboard",
+                            className="mb-3"
+                        ),
                         dbc.FormText([
                             "Need Admin permissions to create warehouses and fetch users", 
                             html.Br(),
-                            "Catalog will be created if it doesn't exist (defaults to 'main')"
+                            "Unity Catalog naming: catalog.schema.table_name (all will be created if they don't exist)"
                         ], className="text-warning")
                     ])
                 ])
@@ -374,9 +390,11 @@ def create_sql_warehouse(n_clicks, hostname, access_token, warehouse_name, clust
     Input("fetch-users-btn", "n_clicks"),
     [State("hostname", "value"),
      State("access-token", "value"),
-     State("catalog-name", "value")]
+     State("catalog-name", "value"),
+     State("schema-name", "value"),
+     State("table-name", "value")]
 )
-def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
+def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name, schema_name, table_name):
     """Fetch users from Databricks workspace using the official SDK users.list() method."""
     logger.info(f"=== FETCH USERS CALLBACK START ===")
     logger.info(f"n_clicks={n_clicks}, hostname_provided={hostname is not None}, token_provided={access_token is not None}")
@@ -399,9 +417,11 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
         logger.info(f"Returning validation error: {error_msg}")
         return "", dbc.Alert(error_msg, color="danger")
     
-    # Default catalog name if not provided
+    # Default UC names if not provided
     catalog_name = catalog_name or "main"
-    logger.info(f"Using catalog: {catalog_name}")
+    schema_name = schema_name or "default"
+    table_name = table_name or "workshop_leaderboard"
+    logger.info(f"Using UC target: {catalog_name}.{schema_name}.{table_name}")
     
     # Test return to verify callback is working
     logger.info("✅ Validation passed, proceeding with user fetch")
@@ -619,7 +639,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name):
         participants_df = pd.DataFrame(df_data)
         logger.info(f"Created DataFrame with {len(participants_df)} participants")
         
-        # Create dedicated serverless warehouse for leaderboard
+        # Create dedicated serverless warehouse for leaderboard and ensure catalog/schema
         warehouse_result = create_leaderboard_warehouse(hostname, access_token, catalog_name)
         
         if warehouse_result['success']:
