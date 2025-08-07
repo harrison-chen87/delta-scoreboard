@@ -1141,7 +1141,11 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
         
         # Query all leaderboard rows; AG Grid will handle virtualization efficiently
         query_sql = f"""
-        SELECT rank, display_name, email, status, score, last_updated
+        SELECT
+          element_at(split(display_name, ' '), 1) AS first_name,
+          element_at(split(display_name, ' '), -1) AS last_name,
+          email,
+          score
         FROM {catalog_name}.{schema_name}.{table_name}
         ORDER BY score DESC, rank ASC
         """
@@ -1156,22 +1160,18 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
         if result.result and result.result.data_array:
             for row in result.result.data_array:
                 leaderboard_data.append({
-                    'rank': row[0],
-                    'display_name': row[1],
+                    'first_name': row[0],
+                    'last_name': row[1],
                     'email': row[2],
-                    'status': row[3],
-                    'score': row[4],
-                    'last_updated': row[5]
+                    'score': row[3]
                 })
         
         # Build AG Grid configuration
         column_defs = [
-            {"headerName": "Rank", "field": "rank", "width": 110},
-            {"headerName": "Name", "field": "display_name", "flex": 1},
-            {"headerName": "Email", "field": "email", "flex": 1},
-            {"headerName": "Status", "field": "status", "width": 140},
-            {"headerName": "Score", "field": "score", "width": 120},
-            {"headerName": "Updated", "field": "last_updated", "width": 200}
+            {"headerName": "First Name", "field": "first_name", "flex": 1},
+            {"headerName": "Last Name", "field": "last_name", "flex": 1},
+            {"headerName": "Email Address", "field": "email", "flex": 1},
+            {"headerName": "Score", "field": "score", "width": 120}
         ]
 
         ag_grid = dag.AgGrid(
@@ -1203,7 +1203,7 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
         leaderboard_ui = html.Div([
             html.Div([
                 html.H6([
-                    html.I(className="bi bI-trophy-fill me-2", style={"color": "#ffc107"}),
+                    html.I(className="bi bi-trophy-fill me-2", style={"color": "#ffc107"}),
                     "Workshop Leaderboard - Live from SQL Warehouse"
                 ], className="mb-2"),
                 html.Div([
