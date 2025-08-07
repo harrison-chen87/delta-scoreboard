@@ -639,7 +639,7 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name, schema
         participants_df = pd.DataFrame(df_data)
         logger.info(f"Created DataFrame with {len(participants_df)} participants")
         
-        # Create dedicated serverless warehouse for leaderboard and ensure catalog/schema
+        # Create dedicated serverless warehouse for leaderboard
         warehouse_result = create_leaderboard_warehouse(hostname, access_token, catalog_name)
         
         if warehouse_result['success']:
@@ -649,17 +649,19 @@ def fetch_users_from_scim(n_clicks, hostname, access_token, catalog_name, schema
                 hostname, 
                 access_token, 
                 warehouse_result['warehouse_id'],
-                catalog_name
+                catalog_name,
+                schema_name,
+                table_name
             )
             
             if storage_result['success']:
                 # Query the warehouse to populate the UI
-                leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, warehouse_result['warehouse_id'], catalog_name)
+                leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, warehouse_result['warehouse_id'], catalog_name, schema_name, table_name)
                 success_message = dbc.Alert([
                     html.H6("🏆 Leaderboard Database Initialized Successfully!", className="alert-heading"),
                     html.P(f"✅ Created dedicated serverless warehouse: {warehouse_result['warehouse_name']}"),
                     html.P(f"⚙️ Configuration: XL size, 8-hour autostop, serverless"),
-                    html.P(f"🗃️ Using catalog: {catalog_name}"),
+                    html.P(f"🗃️ Using table: {catalog_name}.{schema_name}.{table_name}"),
                     html.P(f"📊 Stored {len(users_data)} participants in table: {storage_result['table_name']}"),
                     html.P("🎯 Real-time leaderboard is now ready for workshop activities!")
                 ], color="success")
