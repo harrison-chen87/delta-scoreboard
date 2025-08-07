@@ -898,29 +898,26 @@ def create_leaderboard_warehouse(hostname, access_token, catalog_name):
             logger.warning(f"Could not create catalog '{catalog_name}': {str(e)}. Proceeding with existing catalog.")
         
         # Import required classes for warehouse creation
-        from databricks.sdk.service.sql import CreateWarehouseRequest, EndpointInfoWarehouseType
+        from databricks.sdk.service.sql import EndpointInfoWarehouseType
         
         # Generate unique warehouse name
         import time
         timestamp = int(time.time())
         warehouse_name = f"workshop-leaderboard-{timestamp}"
         
-        # Create warehouse request with serverless XL configuration
-        warehouse_request = CreateWarehouseRequest(
-            name=warehouse_name,
-            cluster_size="X-Large",  # XL size as requested
-            warehouse_type=EndpointInfoWarehouseType.PRO,  # PRO type supports serverless
-            auto_stop_mins=480,  # 8 hours = 480 minutes
-            min_num_clusters=1,
-            max_num_clusters=1,
-            enable_photon=True,  # Enable Photon for better performance
-            enable_serverless_compute=True  # This enables serverless for PRO type
-        )
-        
         logger.info(f"Creating warehouse: {warehouse_name} (XL, serverless, 8h autostop)")
         
-        # Create the warehouse
-        warehouse = workspace_client.warehouses.create(warehouse_request)
+        # Create the warehouse using keyword arguments per SDK requirements
+        warehouse = workspace_client.warehouses.create(
+            name=warehouse_name,
+            cluster_size="X-Large",
+            warehouse_type=EndpointInfoWarehouseType.PRO,
+            auto_stop_mins=480,
+            min_num_clusters=1,
+            max_num_clusters=1,
+            enable_photon=True,
+            enable_serverless_compute=True
+        )
         warehouse_id = warehouse.id
         
         # Start the warehouse
