@@ -290,16 +290,31 @@ app.layout = html.Div([
 @app.callback(
     Output("page-root", "children"),
     Input("url", "pathname"),
-    [State("conn-store", "data"), State("uc-store", "data")]
+    [State("hostname", "value"),
+     State("access-token", "value"),
+     State("catalog-name", "value"),
+     State("schema-name", "value"),
+     State("table-name", "value")]
 )
-def route_pages(pathname, conn_data, uc_data):
+def route_pages(pathname, hostname, access_token, catalog_name, schema_name, table_name):
     # Default main app
     if pathname != "/leaderboard":
         return dash.no_update
-    # Leaderboard dedicated view
+    catalog_name = catalog_name or "main"
+    schema_name = schema_name or "default"
+    table_name = table_name or "workshop_leaderboard"
+    if not all([hostname, access_token]):
+        return dbc.Container([
+            html.H2("📈 Leaderboard", className="mb-3"),
+            dbc.Alert("❌ Please provide hostname and access token on the main page before opening the leaderboard.", color="danger")
+        ], fluid=True)
+    # Render grid directly on the dedicated page (no extra controls)
+    grid = query_leaderboard_from_warehouse(
+        hostname, access_token, None, catalog_name, schema_name, table_name, include_refresh_controls=False
+    )
     return dbc.Container([
         html.H2("📈 Leaderboard", className="mb-3"),
-        html.Div(id="leaderboard-view-container")
+        grid
     ], fluid=True)
 
 @app.callback(
@@ -1330,34 +1345,7 @@ def create_simple_leaderboard_table(users_data):
 
 
 # Viewer callback (placed after app is defined)
-@app.callback(
-    Output("leaderboard-view-container", "children"),
-    Input("load-leaderboard-btn", "n_clicks"),
-    [State("hostname", "value"),
-     State("access-token", "value"),
-     State("catalog-name", "value"),
-     State("schema-name", "value"),
-     State("table-name", "value")],
-    prevent_initial_call=True
-)
-def load_existing_leaderboard(n_clicks, hostname, access_token, catalog_name, schema_name, table_name):
-    if not n_clicks:
-        return ""
-    if not all([hostname, access_token]):
-        return dbc.Alert("❌ Please fill in hostname and access token", color="danger")
-    catalog_name = catalog_name or "main"
-    schema_name = schema_name or "default"
-    table_name = table_name or "workshop_leaderboard"
-    try:
-        logger.info("Loading existing leaderboard via viewer section (opens dedicated tab)")
-        # Render without auto-refresh/button controls in this viewer-only load
-        leaderboard_ui = query_leaderboard_from_warehouse(
-            hostname, access_token, None, catalog_name, schema_name, table_name, include_refresh_controls=False
-        )
-        return leaderboard_ui
-    except Exception as e:
-        logger.error(f"Viewer load failed: {e}")
-        return dbc.Alert(f"❌ Failed to load leaderboard: {str(e)}", color="danger")
+## Removed button-driven viewer callback; dedicated route now renders grid directly
 
 
 # For Databricks Apps deployment
