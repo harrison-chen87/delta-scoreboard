@@ -1,28 +1,3 @@
-@app.callback(
-    Output("leaderboard-view-container", "children"),
-    Input("load-leaderboard-btn", "n_clicks"),
-    [State("hostname", "value"),
-     State("access-token", "value"),
-     State("catalog-name", "value"),
-     State("schema-name", "value"),
-     State("table-name", "value")],
-    prevent_initial_call=True
-)
-def load_existing_leaderboard(n_clicks, hostname, access_token, catalog_name, schema_name, table_name):
-    if not n_clicks:
-        return ""
-    if not all([hostname, access_token]):
-        return dbc.Alert("❌ Please fill in hostname and access token", color="danger")
-    catalog_name = catalog_name or "main"
-    schema_name = schema_name or "default"
-    table_name = table_name or "workshop_leaderboard"
-    try:
-        logger.info("Loading existing leaderboard via viewer section")
-        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name, schema_name, table_name)
-        return leaderboard_ui
-    except Exception as e:
-        logger.error(f"Viewer load failed: {e}")
-        return dbc.Alert(f"❌ Failed to load leaderboard: {str(e)}", color="danger")
 """Delta Drive Workshop Setup - Databricks App Entry Point."""
 
 import dash
@@ -1313,7 +1288,35 @@ def create_simple_leaderboard_table(users_data):
     ])
 
 
+# Viewer callback (placed after app is defined)
+@app.callback(
+    Output("leaderboard-view-container", "children"),
+    Input("load-leaderboard-btn", "n_clicks"),
+    [State("hostname", "value"),
+     State("access-token", "value"),
+     State("catalog-name", "value"),
+     State("schema-name", "value"),
+     State("table-name", "value")],
+    prevent_initial_call=True
+)
+def load_existing_leaderboard(n_clicks, hostname, access_token, catalog_name, schema_name, table_name):
+    if not n_clicks:
+        return ""
+    if not all([hostname, access_token]):
+        return dbc.Alert("❌ Please fill in hostname and access token", color="danger")
+    catalog_name = catalog_name or "main"
+    schema_name = schema_name or "default"
+    table_name = table_name or "workshop_leaderboard"
+    try:
+        logger.info("Loading existing leaderboard via viewer section")
+        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name, schema_name, table_name)
+        return leaderboard_ui
+    except Exception as e:
+        logger.error(f"Viewer load failed: {e}")
+        return dbc.Alert(f"❌ Failed to load leaderboard: {str(e)}", color="danger")
+
+
 # For Databricks Apps deployment
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
-    app.run(debug=False, host="0.0.0.0", port=port) 
+    app.run(debug=False, host="0.0.0.0", port=port)
