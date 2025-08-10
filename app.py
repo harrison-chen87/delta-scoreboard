@@ -179,6 +179,7 @@ def create_user_management_section():
 
 
 app.layout = html.Div([
+    dcc.Location(id="url"),
     html.H1("🏗️ Delta Drive Workshop Setup", className="text-center text-success mb-4"),
     html.Hr(),
     
@@ -261,11 +262,12 @@ app.layout = html.Div([
                 html.H2("📈 Leaderboard Viewer", className="mb-3"),
                 dbc.Card([
                     dbc.CardBody([
-                        dbc.Button(
-                            [html.I(className="bi bi-table me-2"), "Load Existing Leaderboard"],
-                            id="load-leaderboard-btn",
-                            color="primary",
-                            className="mb-3"
+                        html.A(
+                            dbc.Button([
+                                html.I(className="bi bi-table me-2"),
+                                "Load Existing Leaderboard"
+                            ], color="primary", className="mb-3"),
+                            href="/leaderboard", target="_blank", id="open-leaderboard-link"
                         ),
                         html.Div(id="leaderboard-view-container", className="mt-2")
                     ])
@@ -1132,7 +1134,15 @@ def store_leaderboard_in_warehouse(df, hostname, access_token, warehouse_id=None
         }
 
 
-def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, catalog_name="main", schema_name="default", table_name="workshop_leaderboard"):
+def query_leaderboard_from_warehouse(
+    hostname,
+    access_token,
+    warehouse_id=None,
+    catalog_name="main",
+    schema_name="default",
+    table_name="workshop_leaderboard",
+    include_refresh_controls: bool = True,
+):
     """Query the leaderboard from the SQL warehouse and return UI components."""
     try:
         logger.info("Querying leaderboard from warehouse")
@@ -1218,6 +1228,23 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
             style={"height": "650px", "width": "100%"}
         )
 
+        header_controls = [
+            html.Span("🔴 Live", className="badge bg-danger me-2"),
+            html.Span(f"Updated: {pd.Timestamp.now().strftime('%H:%M:%S')}", className="text-muted small"),
+        ]
+        if include_refresh_controls:
+            header_controls.append(dbc.Button("🔄 Refresh Now", id="refresh-leaderboard-btn", color="outline-success", size="sm", className="ms-2"))
+
+        footer_children = [
+            html.P([
+                html.Span(f"📊 Loaded {len(leaderboard_data)} participants from SQL warehouse", className="text-muted small"),
+                html.Br(),
+                html.Span("⚡ AG Grid provides client-side sorting and pagination for fast interaction", className="text-info small")
+            ], className="mt-2 mb-2"),
+        ]
+        if include_refresh_controls:
+            footer_children.append(dcc.Interval(id='leaderboard-refresh-interval', interval=30*1000, n_intervals=0, disabled=False))
+
         leaderboard_ui = html.Div([
             html.Div([
                 html.H6([
@@ -1225,20 +1252,12 @@ def query_leaderboard_from_warehouse(hostname, access_token, warehouse_id=None, 
                     "Workshop Leaderboard - Live from SQL Warehouse"
                 ], className="mb-2"),
                 html.Div([
-                    html.Span("🔴 Live", className="badge bg-danger me-2"),
-                    html.Span(f"Updated: {pd.Timestamp.now().strftime('%H:%M:%S')}", className="text-muted small"),
-                    dbc.Button("🔄 Refresh Now", id="refresh-leaderboard-btn", color="outline-success", size="sm", className="ms-2")
-                ], className="d-flex align-items-center mb-3")
+                    html.Span(f"Warehouse: {getattr(running_warehouse, 'name', 'Unknown')} ({getattr(running_warehouse, 'id', '')})", className="badge bg-secondary me-2"),
+                    *header_controls
+                ], className="d-flex align-items-center mb-3 flex-wrap gap-2")
             ]),
             ag_grid,
-            html.Div([
-                html.P([
-                    html.Span(f"📊 Loaded {len(leaderboard_data)} participants from SQL warehouse", className="text-muted small"),
-                    html.Br(),
-                    html.Span("⚡ AG Grid provides client-side sorting and pagination for fast interaction", className="text-info small")
-                ], className="mt-2 mb-2"),
-                dcc.Interval(id='leaderboard-refresh-interval', interval=30*1000, n_intervals=0, disabled=False)
-            ])
+            html.Div(footer_children)
         ], id="live-leaderboard-container")
         
         logger.info(f"Created leaderboard UI with {len(leaderboard_data)} participants")
@@ -1308,8 +1327,11 @@ def load_existing_leaderboard(n_clicks, hostname, access_token, catalog_name, sc
     schema_name = schema_name or "default"
     table_name = table_name or "workshop_leaderboard"
     try:
-        logger.info("Loading existing leaderboard via viewer section")
-        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name, schema_name, table_name)
+        logger.info("Loading existing leaderboard via viewer section (opens dedicated tab)")
+        # Render without auto-refresh/button controls in this viewer-only load
+        leaderboard_ui = query_leaderboard_from_warehouse(
+            hostname, access_token, None, catalog_name, schema_name, table_name, include_refresh_controls=False
+        )
         return leaderboard_ui
     except Exception as e:
         logger.error(f"Viewer load failed: {e}")
