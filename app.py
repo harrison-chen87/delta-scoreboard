@@ -180,9 +180,12 @@ def create_user_management_section():
 
 app.layout = html.Div([
     dcc.Location(id="url"),
+    dcc.Store(id="conn-store", storage_type="local"),
+    dcc.Store(id="uc-store", storage_type="local"),
     html.H1("🏗️ Delta Drive Workshop Setup", className="text-center text-success mb-4"),
     html.Hr(),
     
+    html.Div(id="page-root", children=[
     dbc.Container([
         dbc.Row([
             dbc.Col([
@@ -218,6 +221,7 @@ app.layout = html.Div([
                             value="main",
                             className="mb-3"
                         ),
+                        dcc.Store(id="catalog-name-store"),
                         dbc.Label("Schema Name", html_for="schema-name"),
                         dbc.Input(
                             id="schema-name",
@@ -226,6 +230,7 @@ app.layout = html.Div([
                             value="default",
                             className="mb-3"
                         ),
+                        dcc.Store(id="schema-name-store"),
                         dbc.Label("Table Name", html_for="table-name"),
                         dbc.Input(
                             id="table-name",
@@ -234,6 +239,7 @@ app.layout = html.Div([
                             value="workshop_leaderboard",
                             className="mb-3"
                         ),
+                        dcc.Store(id="table-name-store"),
                         dbc.FormText([
                             "Need Admin permissions to create warehouses and fetch users", 
                             html.Br(),
@@ -267,7 +273,7 @@ app.layout = html.Div([
                                 html.I(className="bi bi-table me-2"),
                                 "Load Existing Leaderboard"
                             ], color="primary", className="mb-3"),
-                            href="/leaderboard", target="_blank", id="open-leaderboard-link"
+                            href="/leaderboard", target="_blank"
                         ),
                         html.Div(id="leaderboard-view-container", className="mt-2")
                     ])
@@ -277,9 +283,25 @@ app.layout = html.Div([
             
 
     ], fluid=True)
+    ])
 ])
 
 # Callback for SQL warehouse creation (serverless only)
+@app.callback(
+    Output("page-root", "children"),
+    Input("url", "pathname"),
+    [State("conn-store", "data"), State("uc-store", "data")]
+)
+def route_pages(pathname, conn_data, uc_data):
+    # Default main app
+    if pathname != "/leaderboard":
+        return dash.no_update
+    # Leaderboard dedicated view
+    return dbc.Container([
+        html.H2("📈 Leaderboard", className="mb-3"),
+        html.Div(id="leaderboard-view-container")
+    ], fluid=True)
+
 @app.callback(
     Output("warehouse-creation-message", "children"),
     Input("create-warehouse-btn", "n_clicks"),
