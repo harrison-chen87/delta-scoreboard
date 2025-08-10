@@ -1,3 +1,28 @@
+@app.callback(
+    Output("leaderboard-view-container", "children"),
+    Input("load-leaderboard-btn", "n_clicks"),
+    [State("hostname", "value"),
+     State("access-token", "value"),
+     State("catalog-name", "value"),
+     State("schema-name", "value"),
+     State("table-name", "value")],
+    prevent_initial_call=True
+)
+def load_existing_leaderboard(n_clicks, hostname, access_token, catalog_name, schema_name, table_name):
+    if not n_clicks:
+        return ""
+    if not all([hostname, access_token]):
+        return dbc.Alert("❌ Please fill in hostname and access token", color="danger")
+    catalog_name = catalog_name or "main"
+    schema_name = schema_name or "default"
+    table_name = table_name or "workshop_leaderboard"
+    try:
+        logger.info("Loading existing leaderboard via viewer section")
+        leaderboard_ui = query_leaderboard_from_warehouse(hostname, access_token, None, catalog_name, schema_name, table_name)
+        return leaderboard_ui
+    except Exception as e:
+        logger.error(f"Viewer load failed: {e}")
+        return dbc.Alert(f"❌ Failed to load leaderboard: {str(e)}", color="danger")
 """Delta Drive Workshop Setup - Databricks App Entry Point."""
 
 import dash
@@ -254,6 +279,24 @@ app.layout = html.Div([
                     create_user_management_section()
                 ], width=12)
             ], className="mb-4"),
+
+        # Dedicated viewer section to load an existing leaderboard without touching user management
+        dbc.Row([
+            dbc.Col([
+                html.H2("📈 Leaderboard Viewer", className="mb-3"),
+                dbc.Card([
+                    dbc.CardBody([
+                        dbc.Button(
+                            [html.I(className="bi bi-table me-2"), "Load Existing Leaderboard"],
+                            id="load-leaderboard-btn",
+                            color="primary",
+                            className="mb-3"
+                        ),
+                        html.Div(id="leaderboard-view-container", className="mt-2")
+                    ])
+                ])
+            ], width=12)
+        ], className="mb-4"),
             
 
     ], fluid=True)
